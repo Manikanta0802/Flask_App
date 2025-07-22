@@ -1,30 +1,20 @@
 # main.tf
 
-# Configure the AWS provider
 provider "aws" {
-  region = "ap-south-1" # <--- Ensure this matches your desired region
+  region = "ap-south-1" # Your AWS Region
 }
 
-# --- Data Sources (VPC and Subnets) ---
+# --- Data Source for VPC ID and Subnet ---
+data "aws_subnet" "selected_subnet" {
+  id = var.subnet_id_az1
+}
+
 data "aws_vpc" "selected" {
-  filter {
-    name   = "tag:Name"
-    values = ["EmployeeAppVPC"] # Replace with your VPC's Name tag if different
-  }
+  id = data.aws_subnet.selected_subnet.vpc_id
 }
 
-data "aws_subnet" "subnet_az1" {
-  vpc_id            = data.aws_vpc.selected.id
-  availability_zone = "${data.aws_vpc.selected.default_security_group_id}a" # Example for first AZ
-  filter {
-    name   = "tag:Name"
-    values = ["EmployeeAppSubnet-AZ1"] # Replace with your Subnet's Name tag if different
-  }
-}
+# --- Security Groups ---
 
-
-
-# --- Security Group for EC2 Instance ---
 resource "aws_security_group" "ec2_sg" {
   name        = "employee_app_ec2_sg"
   description = "Allow HTTP, SSH, and App traffic to EC2 instance"
@@ -47,7 +37,7 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   ingress {
-    from_port   = 8000
+    from_port   = 8000 # Port for your Flask app
     to_port     = 8000
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] # Allow app traffic on port 8000 from anywhere
@@ -66,99 +56,165 @@ resource "aws_security_group" "ec2_sg" {
   }
 }
 
-# --- IAM Role and Instance Profile for EC2 ---
-resource "aws_iam_role" "ec2_role" {
-  name = "employee_app_ec2_role"
+resource "aws_security_group" "rds_sg" {
+  name        = "employee_app_rds_sg"
+  description = "Allow RDS PostgreSQL traffic only from EC2 SG"
+  vpc_id      = data.aws_vpc.selected.id
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-    ]
-  })
+  ingress {
+    from_port       = 5432 # PostgreSQL default port
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2_sg.id] # Allow from EC2 security group only
+    description     = "Allow PostgreSQL access from EC2 instances"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"] # RDS might need to talk to S3 for snapshots etc.
+  }
 
   tags = {
-    Name = "employee_app_ec2_role"
+    Name = "employee_app_rds_sg"
   }
 }
 
-resource "aws_iam_policy" "ec2_s3_secrets_policy" {
-  name        = "employee_app_ec2_s3_secrets_policy"
-  description = "Policy for EC2 to access S3 and Secrets Manager"
+# --- RDS Database (PostgreSQL) ---
 
-  policy = jsonencode({
-    Version = "2012-10-17"
+resource "aws_db_subnet_group" "employees_db_subnet_group" {
+  name       = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
+  subnet_ids = [
+    var.subnet_id_az1,
+    var.subnet_id_az2
+  ]
+
+  tags = {
+    Name = "employees-db-subnet-group"
+  }
+}
+
+resource "random_id" "db_subnet_group_suffix" {
+  byte_length = 4
+}
+
+
+resource "aws_db_instance" "employees_db" {
+  identifier           = "employees-db-${random_id.db_instance_suffix.hex}"
+  engine               = "postgres"
+  engine_version       = "17.4" # Specify a PostgreSQL version
+  instance_class       = "db.t3.micro"
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  db_name              = "employees"
+  username             = var.db_master_username # Master username for initial access
+  password             = var.db_master_password # Master password for initial access
+  skip_final_snapshot  = true
+  multi_az             = false
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+  db_subnet_group_name = aws_db_subnet_group.employees_db_subnet_group.name
+  publicly_accessible  = true
+
+  tags = {
+    Name = "employees-db"
+  }
+}
+
+resource "random_id" "db_instance_suffix" {
+  byte_length = 4
+}
+
+# --- AWS Secrets Manager for DB Credentials ---
+
+resource "aws_secretsmanager_secret" "db_credentials" {
+  name        = "employee_app/db_credentials_new_1"
+  description = "Database credentials for the employee application"
+
+  tags = {
+    Name = "EmployeeAppDBCredentials"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "db_credentials_version" {
+  secret_id = aws_secretsmanager_secret.db_credentials.id
+  secret_string = jsonencode({
+    username = var.db_master_username,
+    password = var.db_master_password,
+    engine   = "postgres",
+    host     = aws_db_instance.employees_db.address, # Use .address for endpoint without port
+    port     = aws_db_instance.employees_db.port,    # RDS returns integer port
+    dbname   = aws_db_instance.employees_db.db_name
+  })
+}
+
+# --- IAM Role for EC2 to access Secrets Manager ---
+resource "aws_iam_role" "ec2_role" {
+  name = "ec2_app_access_role_${random_id.role_suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ],
-        Resource = [
-          # NO S3 BUCKET RESOURCE NEEDED ANYMORE FOR APP FILES - ONLY IF YOU HAVE OTHER S3 BUCKETS
-          # If you have other S3 buckets the EC2 instance needs to access, add them here
-          # "arn:aws:s3:::your-other-bucket-name",
-          # "arn:aws:s3:::your-other-bucket-name/*"
-        ]
-      },
-      {
-        Effect   = "Allow"
-        Action   = [
-          "secretsmanager:GetSecretValue"
-        ],
-        Resource = "arn:aws:secretsmanager:${var.aws_region}:*:secret:${var.db_secret_name}*" # Ensure region is correct
-      },
-      {
-        Effect   = "Allow"
-        Action   = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:GetRepositoryPolicy",
-          "ecr:DescribeRepositories",
-          "ecr:ListImages",
-          "ecr:BatchGetImage"
-        ],
-        Resource = "*" # ECR actions often require '*' for resource
+        Effect = "Allow",
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "ec2_attach_policy" {
-  role       = aws_iam_role.ec2_role.name
-  policy_arn = aws_iam_policy.ec2_s3_secrets_policy.arn
+resource "random_id" "role_suffix" {
+  byte_length = 4
 }
 
+resource "aws_iam_role_policy" "ec2_role_policy" {
+  role = aws_iam_role.ec2_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = "secretsmanager:GetSecretValue",
+        Resource = aws_secretsmanager_secret.db_credentials.arn # Allow access to specific secret
+      }
+      # No S3 permissions needed here as we are using Git to fetch files
+      # You might add ECR permissions later if you push/pull Docker images from ECR
+    ]
+  })
+}
+
+# IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_instance_profile" {
-  name = "employee_app_ec2_instance_profile"
+  name = "ec2_app_instance_profile_${random_id.instance_profile_suffix.hex}"
   role = aws_iam_role.ec2_role.name
 }
+
+resource "random_id" "instance_profile_suffix" {
+  byte_length = 4
+}
+
 
 # --- EC2 instance ---
 resource "aws_instance" "employee_app" {
   ami                         = var.instance_ami
-  instance_type               = "t3.micro"
+  instance_type               = "t2.micro"
   key_name                    = var.key_pair_name
-  subnet_id                   = local.subnet_id_az1
+  subnet_id                   = var.subnet_id_az1
   vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.ec2_instance_profile.name
 
-  # User Data Script for Docker setup on EC2 with Git cloning
+  # User Data Script for Docker setup with Git cloning
   user_data = <<-EOF
 #!/bin/bash
 sudo yum update -y
 
 # --- Install Git, Docker, and necessary tools ---
-sudo yum install -y git docker jq postgresql # jq and postgresql client for DB setup
+sudo yum install -y git docker jq postgresql # git, docker, jq, and postgresql client for DB setup
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -a -G docker ec2-user # Add ec2-user to the docker group
@@ -168,8 +224,8 @@ newgrp docker || true
 
 # --- Retrieve DB Credentials from Secrets Manager ---
 # IMPORTANT: Ensure your EC2 IAM role has permissions to read from Secrets Manager
-export AWS_DEFAULT_REGION="ap-south-1" # <--- IMPORTANT: REPLACE WITH YOUR ACTUAL AWS REGION if different
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id ${var.db_secret_name} --query SecretString --output text --region ${var.aws_region})
+export AWS_DEFAULT_REGION="ap-south-1" # <--- IMPORTANT: This should match your provider region
+SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id ${aws_secretsmanager_secret.db_credentials.name} --query SecretString --output text --region ap-south-1)
 
 DB_HOST=$(echo $SECRET_JSON | jq -r '.host')
 DB_USER=$(echo $SECRET_JSON | jq -r '.username')
@@ -220,16 +276,17 @@ CREATE TABLE IF NOT EXISTS employees (
 
 # --- Git Clone, Docker Image Build, and Run on EC2 ---
 
-# Define Git Repository URL
+# Define Git Repository URL (from your GitHub repo)
 GIT_REPO_URL="https://github.com/mani852000/Employee_Web.git" # <--- YOUR GITHUB REPO URL
 
-# Clone the repository
-git clone $GIT_REPO_URL /home/ec2-user/employee-app
+# Clone the repository into a dedicated directory
+# The directory name will be the repo name by default (Employee_Web)
+git clone $GIT_REPO_URL /home/ec2-user/employee-app-repo
 
-# Navigate into the cloned repository directory
-cd /home/ec2-user/employee-app
+# Navigate into the cloned repository directory for Docker build
+cd /home/ec2-user/employee-app-repo
 
-echo "Git repository cloned to /home/ec2-user/employee-app."
+echo "Git repository cloned to /home/ec2-user/employee-app-repo."
 
 # Build the Docker image
 # Name the image 'employee-app'
@@ -251,13 +308,24 @@ sudo docker run -d \
 echo "Docker container for employee-app started on EC2."
 
 EOF
+
   tags = {
     Name = "EmployeeAppInstance"
   }
 }
 
-# --- Output the Public IP of the EC2 Instance ---
-output "ec2_public_ip" {
-  description = "The public IP address of the EC2 instance"
+# Outputs
+output "employee_app_public_ip" {
   value       = aws_instance.employee_app.public_ip
+  description = "Public IP address of the Employee App EC2 instance"
+}
+
+output "employee_app_url" {
+  value       = "http://${aws_instance.employee_app.public_ip}:8000" # Include port 8000 for clarity
+  description = "URL to access the Employee App"
+}
+
+output "rds_endpoint" {
+  value       = aws_db_instance.employees_db.endpoint
+  description = "Endpoint for the RDS PostgreSQL database"
 }
