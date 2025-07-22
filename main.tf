@@ -128,14 +128,13 @@ resource "random_id" "db_instance_suffix" {
 # --- AWS Secrets Manager for DB Credentials ---
 
 resource "aws_secretsmanager_secret" "db_credentials" {
-  name        = "employee_app/db_credentials_new_1"
+  name        = "employee_app/db_credentials_new_2"
   description = "Database credentials for the employee application"
 
   tags = {
     Name = "EmployeeAppDBCredentials"
   }
 }
-
 resource "aws_secretsmanager_secret_version" "db_credentials_version" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
@@ -214,7 +213,11 @@ resource "aws_instance" "employee_app" {
 sudo yum update -y
 
 # --- Install Git, Docker, and necessary tools ---
-sudo yum install -y git docker jq postgresql # git, docker, jq, and postgresql client for DB setup
+# Enable a newer PostgreSQL client version using amazon-linux-extras
+sudo amazon-linux-extras enable postgresql13 # Enables PostgreSQL 13 client
+sudo yum clean metadata # Clean yum cache after enabling new extras
+
+sudo yum install -y git docker jq postgresql # git, docker, jq, and postgresql client for DB setup (now with newer libpq)
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -a -G docker ec2-user # Add ec2-user to the docker group
@@ -222,10 +225,10 @@ sudo usermod -a -G docker ec2-user # Add ec2-user to the docker group
 # Attempt to apply group changes immediately (best practice for scripts)
 newgrp docker || true
 
+
 # --- Retrieve DB Credentials from Secrets Manager ---
-# IMPORTANT: Ensure your EC2 IAM role has permissions to read from Secrets Manager
-export AWS_DEFAULT_REGION="ap-south-1" # <--- IMPORTANT: This should match your provider region
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id ${aws_secretsmanager_secret.db_credentials.name} --query SecretString --output text --region ap-south-1)
+export AWS_DEFAULT_REGION="ap-south-1" # <--- IMPORTANT: REPLACE WITH YOUR ACTUAL AWS REGION
+SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id employee_app/db_credentials_new_2 --query SecretString --output text --region ap-south-1)
 
 DB_HOST=$(echo $SECRET_JSON | jq -r '.host')
 DB_USER=$(echo $SECRET_JSON | jq -r '.username')
@@ -235,6 +238,7 @@ DB_NAME=$(echo $SECRET_JSON | jq -r '.dbname')
 echo "DB_HOST: $DB_HOST"
 echo "DB_USER: $DB_USER"
 echo "DB_NAME: $DB_NAME"
+
 
 # --- Initial Database Setup (still on EC2 host, outside Docker) ---
 # This ensures the database and table exist before the app tries to connect
@@ -257,11 +261,11 @@ fi
 
 echo "PostgreSQL is available. Proceeding with initial setup using master user."
 
-# 2. Create 'employees' database if it doesn't exist (as master user)
+# 2. Create 'employees' database if it does not exist (as master user)
 echo "Creating database '$DB_NAME' if it does not exist..."
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -c "
-    SELECT 'CREATE DATABASE $DB_NAME' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')
-" | PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres # Execute the output as a new psql command
+# FIX: Use a robust conditional database creation
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
+
 
 # 3. Create 'employees' table (as master user)
 echo "Creating 'employees' table as master user..."
