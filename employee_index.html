@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Achala Employee Dashboard</title>
+    <style>
+        /* Set background image */
+        body {
+            background-image: url('https://img.freepik.com/free-photo/notebook-glasses-crop-laptop-near-coffee_23-2147777915.jpg?t=st=1732718576~exp=1732722176~hmac=b890b12010d6f9c03110799b3e75aedc153da6ee610b4c17e029313b0592cc33&w=1380'); /* Replace with your image URL */
+            background-size: cover;
+            background-position: center;
+            height: 100vh; /* Make sure the background covers the full height */
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: red; /* Adjust text color for readability on background */
+        }
+
+        /* Center the content in the page */
+        h1 {
+            text-align: center;
+            font-size: 3em;
+        }
+
+        table {
+            margin: 20px 0;
+            width: 80%;
+            border-collapse: collapse;
+            background-color: rgba(0, 0, 0, 0.5); /* Add some transparency for readability */
+            border-radius: 10px;
+        }
+
+        table th, table td {
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+
+        /* Style the input fields and button */
+        input {
+            padding: 10px;
+            margin: 10px;
+            width: 200px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body onload="fetchEmployees()">
+    <h1>Employee Dashboard -1</h1>
+    <h2>Add Employee</h2>
+    <input id="name" placeholder="Name" />
+    <input id="employee_id" placeholder="Employee ID" />
+    <input id="email" placeholder="Email" />
+    <button onclick="addEmployee()">Add</button>
+
+    <br><br>
+    <a href="/employee">View Employee Details</a>
+
+    <script>
+        async function addEmployee() {
+            const name = document.getElementById('name').value;
+            const employee_id = document.getElementById('employee_id').value;
+            const email = document.getElementById('email').value;
+
+            // Check if all fields are filled
+            if (!name || !employee_id || !email) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const data = {
+                name: name,
+                employee_id: employee_id,
+                email: email
+            };
+
+            // Send a POST request to the Flask API
+            try {
+                const response = await fetch('/api/employees', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Employee added successfully!');
+                    // Optionally, clear the form fields after submission
+                    document.getElementById('name').value = '';
+                    document.getElementById('employee_id').value = '';
+                    document.getElementById('email').value = '';
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function fetchEmployees() {
+            const response = await fetch('/api/employees');
+            const employees = await response.json();
+            document.getElementById('employeeTable').innerHTML = employees.data.map(emp =>
+                `<tr><td>${emp.name}</td><td>${emp.employee_id}</td><td>${emp.email}</td></tr>`
+            ).join('');
+        }
+
+        fetchEmployees();
+    </script>
+</body>
+</html>
+    
