@@ -18,13 +18,12 @@ COPY templates templates
 EXPOSE 8000
 
 # Set environment variables for the application
-# These will be dynamically populated from EC2 user data when running the container
 # The values below are placeholders; actual values come from environment variables passed to the container
 ENV DB_HOST="dummy_host" \
     DB_USER="dummy_user" \
     DB_PASSWORD="dummy_password" \
     DB_NAME="dummy_db" \
-    FLASK_APP="employee_app.py" # Ensure this matches your Flask app file name
+    FLASK_APP="employee_app.py"
 
 # Command to run the application using Gunicorn
 CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:8000", "employee_app:app"]
