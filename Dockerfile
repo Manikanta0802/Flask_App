@@ -9,16 +9,21 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire application code into the container
-# This includes employee_app.py and the templates directory
+# Copy the main application file
 COPY employee_app.py .
-COPY templates templates
+
+# Create the 'templates' directory inside the container
+RUN mkdir -p templates
+
+# Copy individual HTML files into the 'templates' directory inside the container
+# ASSUMPTION: employee_index.html and employee_details.html are in the root of your Git repo
+COPY employee_index.html templates/
+COPY employee_details.html templates/
 
 # Expose the port that Gunicorn will listen on
 EXPOSE 8000
 
 # Set environment variables for the application
-# The values below are placeholders; actual values come from environment variables passed to the container
 ENV DB_HOST="dummy_host" \
     DB_USER="dummy_user" \
     DB_PASSWORD="dummy_password" \
