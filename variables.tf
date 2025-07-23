@@ -23,7 +23,6 @@ variable "db_master_password" {
   description = "Master password for the RDS PostgreSQL database"
   type        = string
   sensitive   = true
-  default     = "${{ secrets.DB_MASTER_PASSWORD }}" 
 }
 
 variable "key_pair_name" {
