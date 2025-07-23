@@ -134,7 +134,7 @@ jobs:
 
   cd_application_deployment:
     runs-on: ubuntu-latest
-    needs: cd_infrastructure_and_db_init # This job depends on infrastructure and DB init completing
+    needs: ci # This job depends on infrastructure and DB init completing
     permissions:
       id-token: write
       contents: read
