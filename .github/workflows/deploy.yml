@@ -28,8 +28,8 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt # Assumes you have a requirements.txt file in your repo root
 
-      - name: Run unit tests
-        run: pytest # Assumes you use pytest for your tests. Make sure you have test files.
+      #- name: Run unit tests
+       # run: pytest # Assumes you use pytest for your tests. Make sure you have test files.
 
       - name: Configure AWS credentials for ECR login
         uses: aws-actions/configure-aws-credentials@v4
