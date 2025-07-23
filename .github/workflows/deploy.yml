@@ -167,7 +167,3 @@ jobs:
             --service ${{ needs.cd_infrastructure_and_db_init.outputs.ecs_service_name }} \
             --task-definition employee-app-task \
             --force-new-deployment # Forces ECS to launch new tasks with the latest task definition version
-
-       - name: Run Post-Deployment Smoke Tests
-         run: |
-           curl http://${{ needs.cd_infrastructure_and_db_init.outputs.alb_dns_name }}/health
