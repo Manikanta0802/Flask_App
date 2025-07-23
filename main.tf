@@ -580,7 +580,7 @@ resource "aws_lb" "employee_app_alb" {
 # S3 bucket for ALB access logs
 resource "aws_s3_bucket" "alb_logs_bucket" {
   bucket = "employee-app-alb-logs-${data.aws_caller_identity.current.account_id}" # Unique bucket name
-  acl    = "private" # Or other suitable ACL/ownership controls
+  # Removed the deprecated 'acl' argument
   # Add a bucket policy to allow ALB to write logs to it
   policy = jsonencode({
     Version = "2012-10-17"
@@ -603,10 +603,15 @@ resource "aws_s3_bucket" "alb_logs_bucket" {
       }
     ]
   })
-  # Removed the deprecated lifecycle_rule block from here
   tags = {
     Name = "employee-app-alb-logs-bucket"
   }
+}
+
+# Separate resource for S3 bucket ACL
+resource "aws_s3_bucket_acl" "alb_logs_bucket_acl" {
+  bucket = aws_s3_bucket.alb_logs_bucket.id
+  acl    = "private"
 }
 
 # Separate resource for S3 bucket lifecycle configuration
@@ -615,8 +620,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_bucket_lifecycle" {
 
   rule {
     id      = "log_retention"
-    enabled = true
-
+    status  = "Enabled" # Corrected: 'status' is required, 'enabled' is not
     expiration {
       days = 90
     }
