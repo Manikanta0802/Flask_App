@@ -483,7 +483,7 @@ resource "aws_lb" "employee_app_alb" {
   ]
 
   tags = {
-    Name = "employee_app_alb"
+    Name = "employee-app-alb"
   }
 }
 
