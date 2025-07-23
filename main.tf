@@ -1,3 +1,4 @@
+
 # main.tf
 
 # Configure Terraform to use an S3 backend for state storage
@@ -226,7 +227,7 @@ resource "aws_security_group" "bastion_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.my_ip_cidr] # Allow SSH from your IP
     description = "Allow SSH from specific IP"
   }
 
@@ -359,7 +360,7 @@ resource "aws_db_instance" "employees_db" {
   allocated_storage     = 20
   storage_type          = "gp2"
   db_name               = "employees"
-  username              = var.db_master_username
+  username              = var.db_master_username # This is now correctly sourced from variables.tf
   password              = random_password.db_password.result # Use the generated password
   skip_final_snapshot   = true
   multi_az              = false # Set to true for production for high availability
@@ -580,8 +581,19 @@ resource "aws_lb" "employee_app_alb" {
 # S3 bucket for ALB access logs
 resource "aws_s3_bucket" "alb_logs_bucket" {
   bucket = "employee-app-alb-logs-${data.aws_caller_identity.current.account_id}" # Unique bucket name
-  # Removed the deprecated 'acl' argument
-  # Add a bucket policy to allow ALB to write logs to it
+  # Removed the deprecated 'acl' argument. ACLs are generally not recommended with bucket policies.
+  # Instead, we rely on the bucket policy and object ownership.
+  object_ownership = "BucketOwnerPreferred" # Recommended for log delivery buckets
+
+  tags = {
+    Name = "employee-app-alb-logs-bucket"
+  }
+}
+
+# Separate resource for S3 bucket policy (moved from aws_s3_bucket)
+resource "aws_s3_bucket_policy" "alb_logs_bucket_policy" {
+  bucket = aws_s3_bucket.alb_logs_bucket.id
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -591,7 +603,7 @@ resource "aws_s3_bucket" "alb_logs_bucket" {
           Service = "delivery.logs.amazonaws.com"
         }
         Action = "s3:PutObject"
-        Resource = "arn:aws:s3:::employee-app-alb-logs-${data.aws_caller_identity.current.account_id}/alb-access-logs/*" # Adjust prefix
+        Resource = "arn:aws:s3:::${aws_s3_bucket.alb_logs_bucket.id}/alb-access-logs/*" # Use bucket ID directly
       },
       {
         Effect = "Allow"
@@ -599,19 +611,10 @@ resource "aws_s3_bucket" "alb_logs_bucket" {
           Service = "delivery.logs.amazonaws.com"
         }
         Action = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::employee-app-alb-logs-${data.aws_caller_identity.current.account_id}"
+        Resource = "arn:aws:s3:::${aws_s3_bucket.alb_logs_bucket.id}" # Use bucket ID directly
       }
     ]
   })
-  tags = {
-    Name = "employee-app-alb-logs-bucket"
-  }
-}
-
-# Separate resource for S3 bucket ACL
-resource "aws_s3_bucket_acl" "alb_logs_bucket_acl" {
-  bucket = aws_s3_bucket.alb_logs_bucket.id
-  acl    = "private"
 }
 
 # Separate resource for S3 bucket lifecycle configuration
@@ -621,6 +624,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_bucket_lifecycle" {
   rule {
     id      = "log_retention"
     status  = "Enabled" # Corrected: 'status' is required, 'enabled' is not
+    prefix  = ""        # Added: Applies rule to all objects in the bucket
     expiration {
       days = 90
     }
