@@ -5,7 +5,7 @@
 # with the actual names of your S3 bucket and DynamoDB table
 terraform {
   backend "s3" {
-    bucket         = "employee-app_terraform_state"
+    bucket         = "employee-app-terraform-state"
     key            = "employee-app/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true
