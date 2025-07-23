@@ -1,0 +1,51 @@
+# .github/workflows/destroy.yml
+name: Manually Destroy Employee App Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type "destroy" to confirm infrastructure deletion'
+        required: true
+        type: string
+
+env:
+  AWS_REGION: ap-south-1 # Ensure this matches your deploy.yml region
+
+jobs:
+  destroy_infrastructure:
+    runs-on: ubuntu-latest
+    # Only run if the user types "destroy" in the input field
+    if: github.event.inputs.confirm_destroy == 'destroy'
+    permissions:
+      id-token: write # Required for OIDC authentication with AWS
+      contents: read  # Required to checkout code for Terraform files
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0 # Match the version in your deploy.yml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.GH_ACTIONS_OIDC_ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init (for destroy)
+        run: |
+          # Use sed to replace placeholders for the S3 backend
+          # Ensure these secrets match those used for the deploy workflow
+          sed -i "s/your-terraform-state-bucket-unique-name/${{ secrets.TF_STATE_BUCKET_NAME }}/g" main.tf
+          sed -i "s/your-terraform-state-lock-table/${{ secrets.TF_STATE_LOCK_TABLE_NAME }}/g" main.tf
+          terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET_NAME }}" -backend-config="key=employee-app/terraform.tfstate" -backend-config="region=${{ env.AWS_REGION }}" -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE_NAME }}"
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+
+      - name: Notify on Destruction (Optional)
+        run: echo "Infrastructure destruction workflow completed."
