@@ -1,8 +1,5 @@
 # main.tf
 
-# Configure Terraform to use an S3 backend for state storage
-# REPLACE 'your-terraform-state-bucket-unique-name' and 'your-terraform-state-lock-table'
-# with the actual names of your S3 bucket and DynamoDB table
 terraform {
   backend "s3" {
     bucket         = "employee-app-terraform-state"
@@ -314,8 +311,18 @@ resource "aws_db_subnet_group" "employees_db_subnet_group" {
   }
 }
 
-resource "random_id" "db_subnet_group_suffix" {
-  byte_length = 4
+# Generate a strong, random password for the RDS database
+resource "random_password" "db_password" {
+  length           = 16
+  special          = true
+  override_special = "!@#$%^&*" # Define specific special characters if needed
+  numeric          = true
+  upper            = true
+  lower            = true
+  min_special      = 1
+  min_numeric      = 1
+  min_upper        = 1
+  min_lower        = 1
 }
 
 resource "aws_db_instance" "employees_db" {
@@ -354,17 +361,19 @@ resource "aws_secretsmanager_secret" "db_credentials" {
   }
 }
 
+
 resource "aws_secretsmanager_secret_version" "db_credentials_version" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
     username = var.db_master_username,
-    password = var.db_master_password,
+    password = random_password.db_password.result, 
     engine   = "postgres",
     host     = aws_db_instance.employees_db.address,
     port     = aws_db_instance.employees_db.port,
     dbname   = aws_db_instance.employees_db.db_name
   })
 }
+
 
 # --- ECR Repository for Docker Images ---
 resource "aws_ecr_repository" "employee_app_repo" {
@@ -387,6 +396,54 @@ resource "aws_ecs_cluster" "employee_app_cluster" {
   tags = {
     Name = "employee-app-cluster"
   }
+}
+
+# --- IAM Role for ECS Task (for application-specific permissions like Secrets Manager access) ---
+resource "aws_iam_role" "ecs_task_role" {
+  name = "employee_app_ecs_task_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "employee_app_ecs_task_role"
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_secrets_policy" {
+  name = "ecs-task-secrets-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "kms:Decrypt" # Required if your secret is encrypted with a custom KMS key
+        ],
+        Resource = aws_secretsmanager_secret.db_credentials.arn
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "cloudwatch:PutMetricData"
+        ],
+        Resource = "*" # Can be scoped down to specific metric ARNs if needed
+      }
+    ]
+  })
 }
 
 # --- ECS Task Execution Role (for Fargate to pull images and write logs) ---
@@ -418,36 +475,38 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
 
 # --- ECS Task Definition (for the main application) ---
 resource "aws_ecs_task_definition" "employee_app_task" {
-  family                   = "employee-app-task"
-  container_definitions    = jsonencode([
+  family                 = "employee-app-task"
+  container_definitions  = jsonencode([
     {
-      name      = "employee-app-container"
-      image     = "${aws_ecr_repository.employee_app_repo.repository_url}:latest" # Image will be pushed by CI/CD
-      cpu       = 256 # Fargate CPU units
-      memory    = 512 # Fargate Memory units
-      essential = true
+      name        = "employee-app-container"
+      image       = "${aws_ecr_repository.employee_app_repo.repository_url}:latest" # Image will be pushed by CI/CD
+      cpu         = 256 # Fargate CPU units
+      memory      = 512 # Fargate Memory units
+      essential   = true
       portMappings = [
         {
           containerPort = 8000
           protocol      = "tcp"
         }
       ]
-      environment = [ # Pass DB credentials as environment variables to the container
+      # Pass DB credentials as environment variables from Secrets Manager
+      # The application should then read these environment variables
+      secrets = [
         {
-          name  = "DB_HOST"
-          value = aws_db_instance.employees_db.address
+          name      = "DB_HOST"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:host::" # Extract 'host' field
         },
         {
-          name  = "DB_USER"
-          value = var.db_master_username
+          name      = "DB_USER"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:username::" # Extract 'username' field
         },
         {
-          name  = "DB_PASSWORD"
-          value = var.db_master_password
+          name      = "DB_PASSWORD"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:password::" # Extract 'password' field
         },
         {
-          name  = "DB_NAME"
-          value = aws_db_instance.employees_db.db_name
+          name      = "DB_NAME"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:dbname::" # Extract 'dbname' field
         }
       ]
       logConfiguration = {
@@ -465,6 +524,7 @@ resource "aws_ecs_task_definition" "employee_app_task" {
   cpu                      = "256" # Total CPU for the task
   memory                   = "512" # Total Memory for the task
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn # Assign the task role for app permissions
 
   tags = {
     Name = "employee-app-task"
@@ -644,41 +704,41 @@ resource "aws_iam_role_policy_attachment" "db_init_task_role_policy_attachment" 
 # --- Task Definition for the DB Init Fargate Task ---
 # This task will run a simple image with psql client to initialize the DB.
 resource "aws_ecs_task_definition" "db_init_task" {
-  family                   = "employee-app-db-init-task"
+  family                 = "employee-app-db-init-task"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  network_mode           = "awsvpc"
+  cpu                    = "256"
+  memory                 = "512"
   # Reusing ecs_task_execution_role for pulling image/logging if needed.
-  # The db_init_task_role provides specific permissions for DB access.
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.db_init_task_role.arn
+  execution_role_arn     = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn          = aws_iam_role.db_init_task_role.arn # Assign the task role for DB access and secrets
 
-  container_definitions    = jsonencode([
+  container_definitions  = jsonencode([
     {
-      name      = "db-init-container"
-      image = "public.ecr.aws/docker/library/postgres:16-alpine"
-      # The command runs psql to create the table if it doesn't exist.
-      # PGPASSWORD environment variable is used by psql for non-interactive password.
-      command   = ["/bin/sh", "-c", "/usr/local/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
-      environment = [
+      name    = "db-init-container"
+      image   = "public.ecr.aws/docker/library/postgres:16-alpine"
+      command = ["/bin/sh", "-c", "/usr/local/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
+      secrets = [ # Fetch DB credentials from Secrets Manager
         {
-          name  = "DB_HOST"
-          value = aws_db_instance.employees_db.address
+          name      = "DB_HOST"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:host::"
         },
         {
-          name  = "DB_USER"
-          value = var.db_master_username
+          name      = "DB_USER"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:username::"
         },
         {
-          name  = "DB_NAME"
-          value = aws_db_instance.employees_db.db_name
+          name      = "DB_NAME"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:dbname::"
         },
         {
-          name = "DB_PORT"
-          value = tostring(aws_db_instance.employees_db.port)
+          name      = "DB_PORT"
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:port::"
+        },
+        {
+          name      = "PGPASSWORD" # psql client uses PGPASSWORD env var
+          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:password::"
         }
-        # PGPASSWORD is passed via task overrides in GitHub Actions for security
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -703,5 +763,209 @@ resource "aws_cloudwatch_log_group" "db_init_task_logs" {
 
   tags = {
     Name = "employee-app-db-init-logs"
+  }
+}
+
+# --- CloudWatch Dashboards for DB Init Task Logs ---
+resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
+  dashboard_name = "EmployeeApp-Overview"
+  dashboard_body = jsonencode({
+    "widgets" = [
+      {
+        "type"   = "metric"
+        "x"      = 0
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            # Example: ALB Request Count
+            [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.employee_app_alb.id ],
+            # Example: ECS Service CPU Utilization
+            [ "AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.employee_app_cluster.name, "ServiceName", aws_ecs_service.employee_app_service.name ],
+            # Example: RDS CPU Utilization
+            [ "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.employees_db.id ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "Key Infrastructure Metrics"
+        }
+      },
+      {
+        "type"   = "metric"
+        "x"      = 12
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            # Example: Custom Flask App Errors
+            [ "EmployeeApp/Flask", "ErrorCount", "Application", "EmployeeApp" ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Sum"
+          "region"     = var.aws_region
+          "title"      = "Application Error Count"
+        }
+      },
+      {
+        "type"   = "log"
+        "x"      = 0
+        "y"      = 6
+        "width"  = 24
+        "height" = 6
+        "properties" = {
+          "query"       = "SOURCE '${aws_cloudwatch_log_group.employee_app_log_group.name}' | fields @timestamp, @message | sort @timestamp desc | limit 20"
+          "region"      = var.aws_region
+          "title"       = "Recent Application Logs"
+          "view"        = "table"
+        }
+      }
+    ]
+  })
+  tags = {
+    Name = "EmployeeApp-Overview"
+  }
+}
+
+resource "aws_cloudwatch_dashboard" "employee_app_application_health_dashboard" {
+  dashboard_name = "EmployeeApp-ApplicationHealth"
+  dashboard_body = jsonencode({
+    "widgets" = [
+      {
+        "type"   = "metric"
+        "x"      = 0
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            # Custom Application Metrics (assuming your Flask app pushes these)
+            [ "EmployeeApp/Flask", "RequestDuration", "Endpoint", "all", { "stat": "Average", "label": "Avg Request Duration" } ],
+            [ "EmployeeApp/Flask", "RequestDuration", "Endpoint", "all", { "stat": "p90", "label": "P90 Request Duration" } ],
+            [ "EmployeeApp/Flask", "ErrorCount", "Application", "EmployeeApp", { "stat": "Sum", "label": "Total Errors" } ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 60 # More frequent for app health
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "Application Performance"
+        }
+      },
+      {
+        "type"   = "metric"
+        "x"      = 12
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            # ECS Service Health
+            [ "AWS/ECS", "RunningTaskCount", "ClusterName", aws_ecs_cluster.employee_app_cluster.name, "ServiceName", aws_ecs_service.employee_app_service.name ],
+            [ "AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.employee_app_cluster.name, "ServiceName", aws_ecs_service.employee_app_service.name ],
+            [ "AWS/ECS", "MemoryUtilization", "ClusterName", aws_ecs_cluster.employee_app_cluster.name, "ServiceName", aws_ecs_service.employee_app_service.name ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "ECS Service Health"
+        }
+      },
+      {
+        "type"   = "log"
+        "x"      = 0
+        "y"      = 6
+        "width"  = 24
+        "height" = 6
+        "properties" = {
+          "query"       = "SOURCE '${aws_cloudwatch_log_group.ecs_app_logs.name}' | filter @message like /error|exception/ | fields @timestamp, @message | sort @timestamp desc | limit 20"
+          "region"      = var.aws_region
+          "title"       = "Recent Application Errors in Logs"
+          "view"        = "table"
+        }
+      }
+    ]
+  })
+  tags = {
+    Name = "EmployeeApp-ApplicationHealth-Dashboard"
+  }
+}
+
+resource "aws_cloudwatch_dashboard" "employee_app_database_performance_dashboard" {
+  dashboard_name = "EmployeeApp-DatabasePerformance"
+  dashboard_body = jsonencode({
+    "widgets" = [
+      {
+        "type"   = "metric"
+        "x"      = 0
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            [ "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "CPU Utilization (Average)" } ],
+            [ "AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Database Connections (Average)" } ],
+            [ "AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Free Storage Space (Min)", "stat": "Minimum", "yAxis": { "left": { "showUnits": true } } } ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "RDS Core Performance"
+        }
+      },
+      {
+        "type"   = "metric"
+        "x"      = 12
+        "y"      = 0
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            [ "AWS/RDS", "ReadIOPS", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Read IOPS (Average)" } ],
+            [ "AWS/RDS", "WriteIOPS", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Write IOPS (Average)" } ],
+            [ "AWS/RDS", "ReadLatency", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Read Latency (Average)" } ],
+            [ "AWS/RDS", "WriteLatency", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Write Latency (Average)" } ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "RDS I/O Performance"
+        }
+      },
+      {
+        "type"   = "metric"
+        "x"      = 0
+        "y"      = 6
+        "width"  = 12
+        "height" = 6
+        "properties" = {
+          "metrics" = [
+            [ "AWS/RDS", "NetworkReceiveThroughput", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Network Receive (Average)" } ],
+            [ "AWS/RDS", "NetworkTransmitThroughput", "DBInstanceIdentifier", aws_db_instance.employees_db.id, { "label": "Network Transmit (Average)" } ]
+          ],
+          "view"       = "timeSeries"
+          "stacked"    = false
+          "period"     = 300
+          "stat"       = "Average"
+          "region"     = var.aws_region
+          "title"      = "RDS Network Throughput"
+        }
+      }
+    ]
+  })
+  tags = {
+    Name = "EmployeeApp-DatabasePerformance-Dashboard"
   }
 }
