@@ -1,24 +1,15 @@
-
 # main.tf
 
 # Configure Terraform to use an S3 backend for state storage
+# REPLACE 'your-terraform-state-bucket-unique-name' and 'your-terraform-state-lock-table'
+# with the actual names of your S3 bucket and DynamoDB table
 terraform {
   backend "s3" {
-    bucket         = "employee-app-terraform-state"
+    bucket         = "employee-app_terraform_state"
     key            = "employee-app/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true
     dynamodb_table = "terraform-state-lock-table"
-  }
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-    random = { # Declare the random provider
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
   }
 }
 
@@ -46,29 +37,6 @@ data "aws_ami" "amazon_linux_2_ami" {
 
 # --- Current AWS Caller Identity (used for ARN construction) ---
 data "aws_caller_identity" "current" {}
-
-# --- Random IDs for unique resource naming ---
-resource "random_id" "db_subnet_group_suffix" {
-  byte_length = 4
-}
-
-resource "random_id" "db_instance_suffix" {
-  byte_length = 4
-}
-
-# Generate a strong, random password for the RDS database
-resource "random_password" "db_password" {
-  length           = 16
-  special          = true
-  override_special = "!@#$%^&*" # Define specific special characters if needed
-  numeric          = true
-  upper            = true
-  lower            = true
-  min_special      = 1
-  min_numeric      = 1
-  min_upper        = 1
-  min_lower        = 1
-}
 
 
 # --- VPC ---
@@ -183,7 +151,7 @@ resource "aws_route_table" "private_route_table_az1" {
   vpc_id = aws_vpc.employee_app_vpc.id
 
   route {
-    cidr_block     = "0.0.0.0/0"
+    cidr_block = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
   }
 
@@ -201,7 +169,7 @@ resource "aws_route_table" "private_route_table_az2" {
   vpc_id = aws_vpc.employee_app_vpc.id
 
   route {
-    cidr_block     = "0.0.0.0/0"
+    cidr_block = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
   }
 
@@ -315,14 +283,9 @@ resource "aws_security_group" "rds_sg" {
     description     = "Allow PostgreSQL access from ECS Fargate tasks"
   }
 
-  # Add ingress from Bastion Host for direct DB access
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.bastion_sg.id]
-    description     = "Allow PostgreSQL access from Bastion Host"
-  }
+  # Also allow the DB Init Task to connect if its SG is distinct, or include its specific source.
+  # For simplicity, if the DB Init Task runs using the same fargate SG, it's covered.
+  # If it were to use a different SG, you'd add another ingress block here.
 
   egress {
     from_port   = 0
@@ -339,7 +302,7 @@ resource "aws_security_group" "rds_sg" {
 # --- RDS Database (PostgreSQL) ---
 
 resource "aws_db_subnet_group" "employees_db_subnet_group" {
-  name        = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
+  name       = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
   # RDS subnets should be in at least two different AZs and be private
   subnet_ids = [
     aws_subnet.private_subnet_az1.id,
@@ -351,28 +314,34 @@ resource "aws_db_subnet_group" "employees_db_subnet_group" {
   }
 }
 
+resource "random_id" "db_subnet_group_suffix" {
+  byte_length = 4
+}
 
 resource "aws_db_instance" "employees_db" {
-  identifier            = "employees-db-${random_id.db_instance_suffix.hex}"
-  engine                = "postgres"
-  engine_version        = "17.4" # Specify a PostgreSQL version
-  instance_class        = "db.t3.micro"
-  allocated_storage     = 20
-  storage_type          = "gp2"
-  db_name               = "employees"
-  username              = var.db_master_username # This is now correctly sourced from variables.tf
-  password              = random_password.db_password.result # Use the generated password
-  skip_final_snapshot   = true
-  multi_az              = false # Set to true for production for high availability
+  identifier           = "employees-db-${random_id.db_instance_suffix.hex}"
+  engine               = "postgres"
+  engine_version       = "17.4" # Specify a PostgreSQL version
+  instance_class       = "db.t3.micro"
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  db_name              = "employees"
+  username             = var.db_master_username
+  password             = var.db_master_password
+  skip_final_snapshot  = true
+  multi_az             = false # Set to true for production for high availability
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
-  db_subnet_group_name  = aws_db_subnet_group.employees_db_subnet_group.name
-  publicly_accessible   = false # RDS should NOT be publicly accessible
+  db_subnet_group_name = aws_db_subnet_group.employees_db_subnet_group.name
+  publicly_accessible  = false # RDS should NOT be publicly accessible
 
   tags = {
     Name = "employees-db"
   }
 }
 
+resource "random_id" "db_instance_suffix" {
+  byte_length = 4
+}
 
 # --- AWS Secrets Manager for DB Credentials ---
 
@@ -385,19 +354,17 @@ resource "aws_secretsmanager_secret" "db_credentials" {
   }
 }
 
-
 resource "aws_secretsmanager_secret_version" "db_credentials_version" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
     username = var.db_master_username,
-    password = random_password.db_password.result,
+    password = var.db_master_password,
     engine   = "postgres",
     host     = aws_db_instance.employees_db.address,
     port     = aws_db_instance.employees_db.port,
     dbname   = aws_db_instance.employees_db.db_name
   })
 }
-
 
 # --- ECR Repository for Docker Images ---
 resource "aws_ecr_repository" "employee_app_repo" {
@@ -406,7 +373,6 @@ resource "aws_ecr_repository" "employee_app_repo" {
   image_scanning_configuration {
     scan_on_push = true # Enable vulnerability scanning on push
   }
-  force_delete = true
 
   tags = {
     Name = "employee-app-ecr"
@@ -420,54 +386,6 @@ resource "aws_ecs_cluster" "employee_app_cluster" {
   tags = {
     Name = "employee-app-cluster"
   }
-}
-
-# --- IAM Role for ECS Task (for application-specific permissions like Secrets Manager access) ---
-resource "aws_iam_role" "ecs_task_role" {
-  name = "employee_app_ecs_task_role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      },
-    ]
-  })
-
-  tags = {
-    Name = "employee_app_ecs_task_role"
-  }
-}
-
-resource "aws_iam_role_policy" "ecs_task_secrets_policy" {
-  name = "ecs-task-secrets-policy"
-  role = aws_iam_role.ecs_task_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "kms:Decrypt" # Required if your secret is encrypted with a custom KMS key
-        ],
-        Resource = aws_secretsmanager_secret.db_credentials.arn
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "cloudwatch:PutMetricData"
-        ],
-        Resource = "*" # Can be scoped down to specific metric ARNs if needed
-      }
-    ]
-  })
 }
 
 # --- ECS Task Execution Role (for Fargate to pull images and write logs) ---
@@ -499,38 +417,36 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
 
 # --- ECS Task Definition (for the main application) ---
 resource "aws_ecs_task_definition" "employee_app_task" {
-  family                 = "employee-app-task"
-  container_definitions  = jsonencode([
+  family                   = "employee-app-task"
+  container_definitions    = jsonencode([
     {
-      name        = "employee-app-container"
-      image       = "${aws_ecr_repository.employee_app_repo.repository_url}:latest" # Image will be pushed by CI/CD
-      cpu         = 256 # Fargate CPU units
-      memory      = 512 # Fargate Memory units
-      essential   = true
+      name      = "employee-app-container"
+      image     = "${aws_ecr_repository.employee_app_repo.repository_url}:latest" # Image will be pushed by CI/CD
+      cpu       = 256 # Fargate CPU units
+      memory    = 512 # Fargate Memory units
+      essential = true
       portMappings = [
         {
           containerPort = 8000
           protocol      = "tcp"
         }
       ]
-      # Pass DB credentials as environment variables from Secrets Manager
-      # The application should then read these environment variables
-      secrets = [
+      environment = [ # Pass DB credentials as environment variables to the container
         {
-          name      = "DB_HOST"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:host::" # Extract 'host' field
+          name  = "DB_HOST"
+          value = aws_db_instance.employees_db.address
         },
         {
-          name      = "DB_USER"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:username::" # Extract 'username' field
+          name  = "DB_USER"
+          value = var.db_master_username
         },
         {
-          name      = "DB_PASSWORD"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:password::" # Extract 'password' field
+          name  = "DB_PASSWORD"
+          value = var.db_master_password
         },
         {
-          name      = "DB_NAME"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:dbname::" # Extract 'dbname' field
+          name  = "DB_NAME"
+          value = aws_db_instance.employees_db.db_name
         }
       ]
       logConfiguration = {
@@ -548,7 +464,6 @@ resource "aws_ecs_task_definition" "employee_app_task" {
   cpu                      = "256" # Total CPU for the task
   memory                   = "512" # Total Memory for the task
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn # Assign the task role for app permissions
 
   tags = {
     Name = "employee-app-task"
@@ -557,7 +472,7 @@ resource "aws_ecs_task_definition" "employee_app_task" {
 
 # --- Application Load Balancer (ALB) ---
 resource "aws_lb" "employee_app_alb" {
-  name               = "employee-app-alb"
+  name               = "employee_app_alb"
   internal           = false # Publicly facing
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
@@ -566,71 +481,11 @@ resource "aws_lb" "employee_app_alb" {
     aws_subnet.public_subnet_az1.id,
     aws_subnet.public_subnet_az2.id
   ]
-  # Add ALB access logs to S3
-  access_logs {
-    bucket = aws_s3_bucket.alb_logs_bucket.id
-    prefix = "alb-access-logs" # Optional prefix
-    enabled = true
-  }
 
   tags = {
-    Name = "employee-app-alb"
+    Name = "employee_app_alb"
   }
 }
-
-# S3 bucket for ALB access logs
-resource "aws_s3_bucket" "alb_logs_bucket" {
-  bucket = "employee-app-alb-logs-${data.aws_caller_identity.current.account_id}" # Unique bucket name
-  # Removed the deprecated 'acl' argument. ACLs are generally not recommended with bucket policies.
-  # Instead, we rely on the bucket policy and object ownership.
-  object_ownership = "BucketOwnerPreferred" # Recommended for log delivery buckets
-
-  tags = {
-    Name = "employee-app-alb-logs-bucket"
-  }
-}
-
-# Separate resource for S3 bucket policy (moved from aws_s3_bucket)
-resource "aws_s3_bucket_policy" "alb_logs_bucket_policy" {
-  bucket = aws_s3_bucket.alb_logs_bucket.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "delivery.logs.amazonaws.com"
-        }
-        Action = "s3:PutObject"
-        Resource = "arn:aws:s3:::${aws_s3_bucket.alb_logs_bucket.id}/alb-access-logs/*" # Use bucket ID directly
-      },
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "delivery.logs.amazonaws.com"
-        }
-        Action = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::${aws_s3_bucket.alb_logs_bucket.id}" # Use bucket ID directly
-      }
-    ]
-  })
-}
-
-# Separate resource for S3 bucket lifecycle configuration
-resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_bucket_lifecycle" {
-  bucket = aws_s3_bucket.alb_logs_bucket.id
-
-  rule {
-    id      = "log_retention"
-    status  = "Enabled" # Corrected: 'status' is required, 'enabled' is not
-    prefix  = ""        # Added: Applies rule to all objects in the bucket
-    expiration {
-      days = 90
-    }
-  }
-}
-
 
 resource "aws_lb_target_group" "employee_app_tg" {
   name        = "employee-app-tg"
@@ -760,13 +615,11 @@ resource "aws_iam_policy" "db_init_task_policy" {
         Effect = "Allow",
         Action = [
           "rds-db:connect",
-          "secretsmanager:GetSecretValue",
-          "kms:Decrypt" # Required if your secret is encrypted with a custom KMS key
+          "secretsmanager:GetSecretValue"
         ],
         Resource = [
           aws_db_instance.employees_db.arn,
-          aws_secretsmanager_secret.db_credentials.arn,
-          # If a custom KMS key is used for Secrets Manager, its ARN should be here as well
+          aws_secretsmanager_secret.db_credentials.arn
         ]
       },
       { # Permissions for CloudWatch Logs for the DB Init Task
@@ -790,41 +643,41 @@ resource "aws_iam_role_policy_attachment" "db_init_task_role_policy_attachment" 
 # --- Task Definition for the DB Init Fargate Task ---
 # This task will run a simple image with psql client to initialize the DB.
 resource "aws_ecs_task_definition" "db_init_task" {
-  family                 = "employee-app-db-init-task"
+  family                   = "employee-app-db-init-task"
   requires_compatibilities = ["FARGATE"]
-  network_mode           = "awsvpc"
-  cpu                    = "256"
-  memory                 = "512"
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
   # Reusing ecs_task_execution_role for pulling image/logging if needed.
-  execution_role_arn     = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn          = aws_iam_role.db_init_task_role.arn # Assign the task role for DB access and secrets
+  # The db_init_task_role provides specific permissions for DB access.
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.db_init_task_role.arn
 
-  container_definitions  = jsonencode([
+  container_definitions    = jsonencode([
     {
-      name    = "db-init-container"
-      image   = "public.ecr.aws/docker/library/postgres:16-alpine"
-      command = ["/bin/sh", "-c", "/usr/local/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
-      secrets = [ # Fetch DB credentials from Secrets Manager
+      name      = "db-init-container"
+      image     = "public.ecr.aws/bitnami/postgresql-client:17.0" # A small image with psql client
+      # The command runs psql to create the table if it doesn't exist.
+      # PGPASSWORD environment variable is used by psql for non-interactive password.
+      command   = ["/bin/sh", "-c", "/usr/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
+      environment = [
         {
-          name      = "DB_HOST"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:host::"
+          name  = "DB_HOST"
+          value = aws_db_instance.employees_db.address
         },
         {
-          name      = "DB_USER"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:username::"
+          name  = "DB_USER"
+          value = var.db_master_username
         },
         {
-          name      = "DB_NAME"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:dbname::"
+          name  = "DB_NAME"
+          value = aws_db_instance.employees_db.db_name
         },
         {
-          name      = "DB_PORT"
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:port::"
-        },
-        {
-          name      = "PGPASSWORD" # psql client uses PGPASSWORD env var
-          valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:password::"
+          name = "DB_PORT"
+          value = tostring(aws_db_instance.employees_db.port)
         }
+        # PGPASSWORD is passed via task overrides in GitHub Actions for security
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -851,6 +704,7 @@ resource "aws_cloudwatch_log_group" "db_init_task_logs" {
     Name = "employee-app-db-init-logs"
   }
 }
+
 
 # --- CloudWatch Dashboard: EmployeeApp-Overview ---
 resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
