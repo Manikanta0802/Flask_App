@@ -6,12 +6,6 @@ variable "aws_region" {
   default     = "ap-south-1"
 }
 
-variable "my_ip_cidr" {
-  description = "Your public IP address in CIDR format for SSH access (e.g., 203.0.113.45/32)"
-  type        = string
-  default     = "0.0.0.0/0" # WARNING: Change this to your actual IP for production!
-}
-
 
 variable "db_master_username" {
   description = "Master username for the RDS PostgreSQL database"
