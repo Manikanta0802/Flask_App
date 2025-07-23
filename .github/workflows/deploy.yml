@@ -104,6 +104,8 @@ jobs:
 
       - name: Terraform Apply (Provision/Update Infrastructure)
         run: terraform apply -auto-approve # -auto-approve skips the manual confirmation. Use with caution in production.
+        env:
+         TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
 
       - name: Get Terraform Outputs
         id: get-tf-outputs # ID for this step to retrieve its outputs
