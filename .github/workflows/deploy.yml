@@ -52,15 +52,15 @@ jobs:
           push: true
           tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:latest,${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:${{ github.sha }}
 
-      # Optional but Recommended: Add Docker image vulnerability scanning here (e.g., Trivy)
-      # - name: Scan Docker image for vulnerabilities
-      #   uses: aquasecurity/trivy-action@master
-      #   with:
-      #     image-ref: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:${{ github.sha }}
-      #     format: 'table'
-      #     exit-code: '1' # Fail if critical vulnerabilities are found
-      #     ignore-unfixed: true
-      #     severity: 'CRITICAL,HIGH'
+      # Add Docker image vulnerability scanning here (e.g., Trivy)
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:${{ github.sha }}
+          format: 'table'
+          exit-code: '1' # Fail if critical vulnerabilities are found
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
 
   cd_infrastructure_and_db_init:
     runs-on: ubuntu-latest
@@ -103,7 +103,11 @@ jobs:
           terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET_NAME }}" -backend-config="key=employee-app/terraform.tfstate" -backend-config="region=${{ env.AWS_REGION }}" -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE_NAME }}"
 
       - name: Terraform Apply (Provision/Update Infrastructure)
-        run: terraform apply -auto-approve # -auto-approve skips the manual confirmation. Use with caution in production.
+        run: |
+          terraform apply -auto-approve \
+            -var="db_master_username=${{ secrets.DB_MASTER_USERNAME }}" \
+            -var="my_ip_cidr=${{ secrets.MY_IP_CIDR }}" \
+            -var="key_pair_name=${{ secrets.KEY_PAIR_NAME }}"
 
       - name: Get Terraform Outputs
         id: get-tf-outputs # ID for this step to retrieve its outputs
@@ -120,25 +124,16 @@ jobs:
 
       - name: Run DB Init Fargate Task
         run: |
-          # The DB_PASSWORD is passed as an override to the task's environment.
-          # This is necessary because Psql client expects PGPASSWORD env variable for non-interactive login.
-          # The DB_MASTER_PASSWORD secret is securely passed from GitHub Actions to the Fargate task.
-
-          # 1. Run the task and capture its ARN
           TASK_ARN=$(aws ecs run-task \
             --cluster ${{ steps.get-tf-outputs.outputs.ecs_cluster_name }} \
             --task-definition ${{ steps.get-tf-outputs.outputs.db_init_task_definition_arn }} \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[${{ steps.get-tf-outputs.outputs.private_subnet_az1_id }},${{ steps.get-tf-outputs.outputs.private_subnet_az2_id }}],securityGroups=[${{ steps.get-tf-outputs.outputs.ecs_fargate_sg_id }}],assignPublicIp=DISABLED}" \
             --started-by "github-actions-db-init" \
-            --overrides '{"containerOverrides":[{"name":"db-init-container","environment":[{"name":"PGPASSWORD","value":"${{ secrets.DB_MASTER_PASSWORD }}"}]}]}' \
             --query 'tasks[0].taskArn' \
             --output text)
 
           echo "Started DB Init Task with ARN: $TASK_ARN"
-
-          # 2. Wait for the task to stop
-          echo "Waiting for DB Init Task to complete..."
           aws ecs wait tasks-stopped --cluster ${{ steps.get-tf-outputs.outputs.ecs_cluster_name }} --tasks "$TASK_ARN"
           echo "DB Init Task completed!"
 
@@ -173,8 +168,6 @@ jobs:
             --task-definition employee-app-task \
             --force-new-deployment # Forces ECS to launch new tasks with the latest task definition version
 
-      # Optional: Add post-deployment smoke/integration tests here
-      # - name: Run Post-Deployment Smoke Tests
-      #   run: |
-      #     # Example: curl http://${{ needs.cd_infrastructure_and_db_init.outputs.alb_dns_name }}/health
-      #     # Add actual API calls to verify application functionality after deployment
+       - name: Run Post-Deployment Smoke Tests
+         run: |
+           curl http://${{ needs.cd_infrastructure_and_db_init.outputs.alb_dns_name }}/health
