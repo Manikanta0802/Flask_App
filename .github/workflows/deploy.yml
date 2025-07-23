@@ -123,14 +123,24 @@ jobs:
           # The DB_PASSWORD is passed as an override to the task's environment.
           # This is necessary because Psql client expects PGPASSWORD env variable for non-interactive login.
           # The DB_MASTER_PASSWORD secret is securely passed from GitHub Actions to the Fargate task.
-          aws ecs run-task \
+
+          # 1. Run the task and capture its ARN
+          TASK_ARN=$(aws ecs run-task \
             --cluster ${{ steps.get-tf-outputs.outputs.ecs_cluster_name }} \
             --task-definition ${{ steps.get-tf-outputs.outputs.db_init_task_definition_arn }} \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[${{ steps.get-tf-outputs.outputs.private_subnet_az1_id }},${{ steps.get-tf-outputs.outputs.private_subnet_az2_id }}],securityGroups=[${{ steps.get-tf-outputs.outputs.ecs_fargate_sg_id }}],assignPublicIp=DISABLED}" \
             --started-by "github-actions-db-init" \
             --overrides '{"containerOverrides":[{"name":"db-init-container","environment":[{"name":"PGPASSWORD","value":"${{ secrets.DB_MASTER_PASSWORD }}"}]}]}' \
-            --wait-for-task-stops # Wait for the task to complete its job
+            --query 'tasks[0].taskArn' \
+            --output text)
+
+          echo "Started DB Init Task with ARN: $TASK_ARN"
+
+          # 2. Wait for the task to stop
+          echo "Waiting for DB Init Task to complete..."
+          aws ecs wait tasks-stopped --cluster ${{ steps.get-tf-outputs.outputs.ecs_cluster_name }} --tasks "$TASK_ARN"
+          echo "DB Init Task completed!"
 
   cd_application_deployment:
     runs-on: ubuntu-latest
