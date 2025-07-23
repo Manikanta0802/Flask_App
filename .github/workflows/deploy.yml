@@ -158,6 +158,12 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.GH_ACTIONS_OIDC_ROLE_NAME }}
           aws-region: ${{ env.AWS_REGION }}
+          
+
+      - name: Debug ECS Cluster and Service Names
+        run: |
+          echo "DEBUG: Cluster Name: '${{ needs.cd_infrastructure_and_db_init.outputs.ecs_cluster_name }}'"
+          echo "DEBUG: Service Name: '${{ needs.cd_infrastructure_and_db_init.outputs.ecs_service_name }}'"
 
       - name: Update ECS Service with new image
         run: |
