@@ -659,7 +659,7 @@ resource "aws_ecs_task_definition" "db_init_task" {
       image = "public.ecr.aws/docker/library/postgres:16-alpine"
       # The command runs psql to create the table if it doesn't exist.
       # PGPASSWORD environment variable is used by psql for non-interactive password.
-      command   = ["/bin/sh", "-c", "/usr/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
+      command   = ["/bin/sh", "-c", "/usr/local/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
       environment = [
         {
           name  = "DB_HOST"
