@@ -106,8 +106,6 @@ jobs:
         run: |
           terraform apply -auto-approve \
             -var="db_master_username=${{ secrets.DB_MASTER_USERNAME }}" \
-            -var="my_ip_cidr=${{ secrets.MY_IP_CIDR }}" \
-            -var="key_pair_name=${{ secrets.KEY_PAIR_NAME }}"
 
       - name: Get Terraform Outputs
         id: get-tf-outputs # ID for this step to retrieve its outputs
