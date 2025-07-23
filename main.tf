@@ -46,6 +46,29 @@ data "aws_ami" "amazon_linux_2_ami" {
 # --- Current AWS Caller Identity (used for ARN construction) ---
 data "aws_caller_identity" "current" {}
 
+# --- Random IDs for unique resource naming ---
+resource "random_id" "db_subnet_group_suffix" {
+  byte_length = 4
+}
+
+resource "random_id" "db_instance_suffix" {
+  byte_length = 4
+}
+
+# Generate a strong, random password for the RDS database
+resource "random_password" "db_password" {
+  length           = 16
+  special          = true
+  override_special = "!@#$%^&*" # Define specific special characters if needed
+  numeric          = true
+  upper            = true
+  lower            = true
+  min_special      = 1
+  min_numeric      = 1
+  min_upper        = 1
+  min_lower        = 1
+}
+
 
 # --- VPC ---
 resource "aws_vpc" "employee_app_vpc" {
@@ -268,7 +291,7 @@ resource "aws_security_group" "ecs_fargate_sg" {
   # Fargate tasks will need outbound access to ECR, Secrets Manager, etc. via NAT Gateway
   egress {
     from_port   = 0
-    to_port       = 0
+    to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -314,11 +337,6 @@ resource "aws_security_group" "rds_sg" {
 
 # --- RDS Database (PostgreSQL) ---
 
-# This random_id must be declared before aws_db_subnet_group
-resource "random_id" "db_subnet_group_suffix" {
-  byte_length = 4
-}
-
 resource "aws_db_subnet_group" "employees_db_subnet_group" {
   name        = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
   # RDS subnets should be in at least two different AZs and be private
@@ -332,20 +350,6 @@ resource "aws_db_subnet_group" "employees_db_subnet_group" {
   }
 }
 
-
-# Generate a strong, random password for the RDS database
-resource "random_password" "db_password" {
-  length           = 16
-  special          = true
-  override_special = "!@#$%^&*" # Define specific special characters if needed
-  numeric          = true
-  upper            = true
-  lower            = true
-  min_special      = 1
-  min_numeric      = 1
-  min_upper        = 1
-  min_lower        = 1
-}
 
 resource "aws_db_instance" "employees_db" {
   identifier            = "employees-db-${random_id.db_instance_suffix.hex}"
@@ -368,9 +372,6 @@ resource "aws_db_instance" "employees_db" {
   }
 }
 
-resource "random_id" "db_instance_suffix" {
-  byte_length = 4
-}
 
 # --- AWS Secrets Manager for DB Credentials ---
 
@@ -602,15 +603,23 @@ resource "aws_s3_bucket" "alb_logs_bucket" {
       }
     ]
   })
-  lifecycle_rule { # Optional: automatically expire logs after a period
+  # Removed the deprecated lifecycle_rule block from here
+  tags = {
+    Name = "employee-app-alb-logs-bucket"
+  }
+}
+
+# Separate resource for S3 bucket lifecycle configuration
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_bucket_lifecycle" {
+  bucket = aws_s3_bucket.alb_logs_bucket.id
+
+  rule {
     id      = "log_retention"
     enabled = true
+
     expiration {
       days = 90
     }
-  }
-  tags = {
-    Name = "employee-app-alb-logs-bucket"
   }
 }
 
@@ -1030,5 +1039,4 @@ resource "aws_cloudwatch_dashboard" "employee_app_database_performance_dashboard
       }
     ]
   })
-
 }
