@@ -510,7 +510,7 @@ resource "aws_lb_target_group" "employee_app_tg" {
 }
 
 resource "aws_lb_listener" "http_listener" {
-  load_balancer_arn = aws_lb.employee_app_alb.arn
+  load_balancer_arn = aws_lb.employee-app-alb.arn
   port              = 80
   protocol          = "HTTP"
 
