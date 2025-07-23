@@ -27,108 +27,161 @@ This project deploys a Python Flask application for employee management as a con
 It leverages Amazon RDS for PostgreSQL as its database backend and an Application Load Balancer (ALB) for external access. 
 The entire infrastructure is defined using Terraform for repeatable and consistent deployments.
 
-## Architecture Diagram
 
-[**Crucial:** Insert a clear, high-level architecture diagram here.]
-
-* **Tools:** Use `draw.io` (now diagrams.net), `Lucidchart`, or even AWS's own `Cloudcraft` or `Architecture Center` for icons.
-* **Key Elements to show:**
-    * VPC with CIDR (e.g., 10.0.0.0/16)
-    * Public Subnets (with Internet Gateway)
-    * Private Subnets (with NAT Gateway)
-    * Bastion Host (in Public Subnet, pointing to Private)
-    * Application Load Balancer (in Public Subnets)
-    * ECS Fargate Cluster (ECS Service & Tasks in Private Subnets, behind ALB)
-    * RDS PostgreSQL (in Private Subnets, in DB Subnet Group)
-    * Security Group Arrows (showing allowed traffic flows)
-    * CloudWatch (showing metrics/logs going into it)
-    * S3 (for ALB Access Logs, Terraform State)
-    * Secrets Manager (showing how secrets are accessed)
-
-## Deployment
+## Setup and Deployment
+This section guides you through setting up your local environment and deploying the infrastructure and application using the CI/CD pipeline.
 
 ### Prerequisites
 
 * AWS Account with necessary permissions.
 * AWS CLI configured.
 * Terraform (v1.x recommended).
-* `git` installed.
+* git installed.
 * Docker Desktop (for building and pushing images).
-* Your SSH key pair (e.g., `app-key.pem`) for Bastion Host access.
+* Your SSH key pair (e.g., app-key.pem) for Bastion Host access.
 
-### Setup Instructions
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone https://github.com/mani852000/Employee_Web.git
-    cd Employee_Web
-    ```
+Then clone this repository.
 
-2.  **Configure Terraform Backend:**
-    If you're using an S3 backend for Terraform state, ensure your `backend.tf` is configured and the S3 bucket and DynamoDB table exist (or create them manually/via a separate script).
-    ```terraform
-    # backend.tf (example)
-    terraform {
-      backend "s3" {
-        bucket         = "my-terraform-state-bucket"
-        key            = "employee-app/terraform.tfstate"
-        region         = "ap-south-1"
-        encrypt        = true
-        dynamodb_table = "my-terraform-state-lock"
-      }
-    }
-    ```
+git clone https://github.com/mani852000/Employee_Web.git
+cd Employee_Web
 
-3.  **Prepare SSH Key Pair:**
-    Ensure you have an EC2 Key Pair named `app-key` in `ap-south-1` region, and its `.pem` file is at `~/.ssh/app-key.pem` with `chmod 400`. If not, create it:
-    ```bash
-    aws ec2 create-key-pair --key-name app-key --query 'KeyMaterial' --output text > ~/.ssh/app-key.pem
-    chmod 400 ~/.ssh/app-key.pem
-    ```
 
-4.  **Create `terraform.tfvars`:**
-    Create `terraform.tfvars` in the root:
-    ```hcl
-    aws_region         = "ap-south-1"
-    db_master_username = "pgadmin" # Consistent with previous setup
-    db_name            = "employees" # Consistent with previous setup
-    # db_master_password will be prompted or supplied via CI/CD
-    ```
+### CRITICAL Steps Before Running the Pipeline:
+**AWS IAM OIDC Setup:**
 
-5.  **Build and Push Docker Images to ECR:**
-    * **Login to ECR:**
-        ```bash
-        aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${your_aws_account_id}.dkr.ecr.${aws_region}.amazonaws.com
-        ```
-    * **Build & Push `employee-app`:**
-        ```bash
-        docker build -t employee-app application/
-        docker tag employee-app:latest ${your_aws_account_id}.dkr.ecr.${aws_region}[.amazonaws.com/employee-app:latest](https://.amazonaws.com/employee-app:latest)
-        docker push ${your_aws_account_id}.dkr.ecr.${aws_region}[.amazonaws.com/employee-app:latest](https://.amazonaws.com/employee-app:latest)
-        ```
-    * **Build & Push `db-init-container`:**
-        ```bash
-        docker build -t employee-app-db-init db-init-docker/
-        docker tag employee-app-db-init:latest ${your_aws_account_id}.dkr.ecr.${aws_region}[.amazonaws.com/employee-app-db-init:latest](https://.amazonaws.com/employee-app-db-init:latest)
-        docker push ${your_aws_account_id}.dkr.ecr.${aws_region}[.amazonaws.com/employee-app-db-init:latest](https://.amazonaws.com/employee-app-db-init:latest)
-        ```
+You MUST set up the OIDC Identity Provider and IAM Role in your AWS account. This is a one-time manual process.
 
-6.  **Initialize and Apply Terraform:**
-    ```bash
-    terraform init
-    terraform plan -out tfplan
-    terraform apply "tfplan"
-    ```
-    You will be prompted to enter the `db_master_password`.
+Refer to the detailed instructions in my previous response on how to create the token.actions.githubusercontent.com Identity Provider and the github-actions-oidc-role (or whatever you name it) with the correct trust policy and permissions.
 
-7.  **Verify Deployment:**
-    * Check AWS Console: EC2, RDS, ECS Cluster, ALB.
-    * Get ALB DNS Name: `terraform output alb_dns_name`
-    * Access the application: `http://<ALB_DNS_NAME>/employees` (or other defined Flask endpoints).
+**Create AWS S3 Bucket and DynamoDB Table (Manually for first time):**
+
+**S3 Bucket:** Create an S3 bucket with a globally unique name (e.g., employee-app-terraform-state-yourname-123). This will store your Terraform state file.
+
+**DynamoDB Table:** Create a DynamoDB table with the exact name you used in your main.tf (e.g., employee-app-terraform-locks). The primary key must be LockID (String). This table is for Terraform state locking.
+
+Add the S3, DynamoDB file names to the terraform { backend "s3" { ... } } block at the very top (just after the provider block) with your unique S3 bucket name and unique DynamoDB table name.
+
+**main.tf:**
+
+Ensure the new aws_ecs_task_definition.db_init_task and its related IAM role/policy are present at the end of main.tf as provided in my previous turn. Double-check the command in the db_init_task definition to ensure it precisely matches your desired psql command for creating the table.
+
+**outputs.tf**: Ensure all the new outputs for db_init_task_definition_arn, db_init_task_role_arn, ecr_repository_url, etc., are correctly added.
+
+
+### Configure GitHub Repository Secrets:
+
+In your GitHub repository, go to Settings > Secrets and variables > Actions > New repository secret.
+
+Add the following secrets, using their exact names as referenced in the deploy.yml:
+
+AWS_ACCOUNT_ID: Your 12-digit AWS Account ID.
+
+GH_ACTIONS_OIDC_ROLE_NAME: The name you gave to the IAM role for GitHub Actions OIDC (e.g., github-actions-oidc-role).
+
+TF_STATE_BUCKET_NAME: The exact name of the S3 bucket you created for Terraform state.
+
+TF_STATE_LOCK_TABLE_NAME: The exact name of the DynamoDB table you created for Terraform state locking.
+
+DB_MASTER_USERNAME: Your RDS master username.
+
+DB_MASTER_PASSWORD: Your RDS master password.
+
+DB_SECRET_NAME: The name of your Secrets Manager secret (employee_app/db_credentials_new_1).
+
+**Application Files:**
+
+Ensure your Flask application code, Dockerfile, and requirements.txt are in the root of your repository (or adjust the context in the docker/build-push-action).
+
+If you have unit tests, ensure your pytest setup is correct for the pytest step.
+
+Once all these prerequisites are met and your files are committed to the main branch, a push to main will automatically trigger this powerful CI/CD pipeline!
+
+## CI/CD Pipeline Execution
+Once your GitHub repository is set up with the workflow file and secrets, the CI/CD pipeline will automatically trigger on:
+
+**Pushes to the main branch:** Any code changes pushed to main will initiate a new build and deployment.
+**Manual Trigger:** You can manually trigger the workflow from the "Actions" tab in your GitHub repository by selecting the "CI/CD Pipeline for Employee App (Fargate)" workflow and clicking "Run workflow."
+
+Monitor the "Actions" tab in your GitHub repository to see the pipeline's progress and logs. 
 
 ### Destroying the Infrastructure
 
-To remove all deployed AWS resources (this will incur data loss for the database)
+To remove all deployed AWS resources You can manually trigger the workflow from the "Actions" tab in your GitHub repository by selecting the "Manually Destroy App Infrastructure" workflow and clicking "Run workflow."
+
+### Important Notes for Cleanup:
+
+**S3 Bucket for ALB Logs:** The aws_s3_bucket.alb_logs_bucket has force_destroy = false by default (a safety measure). If you encounter an error during terraform destroy related to the S3 bucket not being empty or force_destroy being false, you will need to:
+
+Manually empty the S3 bucket (employee-app-alb-logs-<ACCOUNT_ID>) via the AWS Console or AWS CLI.
+
+Then, re-run terraform destroy.
+
+**ECR Repository:** The aws_ecr_repository.employee_app_repo has force_delete = true, so it should be deleted even if it contains images.
+
+## AWS Services Used
+VPC (Virtual Private Cloud): Isolated network environment with public and private subnets, Internet Gateway, NAT Gateway, and custom route tables.
+
+EC2 (Elastic Compute Cloud): A Bastion Host (jump box) for secure administrative access.
+
+ECS (Elastic Container Service) Fargate: Serverless compute for running containerized applications without managing underlying EC2 instances.
+
+ECS Cluster: Logical grouping for ECS services.
+
+ECS Service: Maintains the desired count of tasks and integrates with the ALB.
+
+ECS Task Definitions: Blueprints for your application and database initialization containers.
+
+ECR (Elastic Container Registry): A fully managed Docker container registry for storing application images.
+
+RDS (Relational Database Service): Managed PostgreSQL database for the application's data persistence.
+
+ALB (Application Load Balancer): Distributes incoming application traffic across multiple targets (ECS tasks).
+
+Secrets Manager: Securely stores and manages sensitive information like database credentials.
+
+IAM (Identity and Access Management): Manages access to AWS resources, including roles for GitHub Actions, ECS tasks, and the DB initialization task.
+
+CloudWatch: For monitoring and logging:
+
+CloudWatch Logs: Collects logs from ECS tasks.
+
+CloudWatch Metrics: Collects performance metrics from AWS services.
+
+CloudWatch Dashboards: Visualizes key metrics and logs for operational insights.
+
+S3 (Simple Storage Service): Used for:
+
+Terraform remote state storage.
+
+ALB access log storage.
+
+DynamoDB: Used for Terraform state locking to prevent concurrent state modifications.
+
+
+## Observability and Monitoring
+Comprehensive monitoring and logging are set up to provide insights into the application and infrastructure health.
+### CloudWatch Logs
+•**ECS Application Logs**: All standard output and error streams from your Flask application container are sent to the /ecs/employee-app CloudWatch Log Group.
+•	**DB Init Task Logs**: Logs from the database initialization Fargate task are sent to the /ecs/db-init-task CloudWatch Log Group.
+•	**Log Retention**: Logs are configured with a 7-day retention period (customizable).
+## CloudWatch Metrics & Dashboards
+Three dedicated CloudWatch Dashboards are provisioned to give you a holistic view:
+**1.	EmployeeApp-Overview**:
+o	Key Infrastructure Metrics: ALB Request Count, ECS CPU Utilization, RDS CPU Utilization.
+o	Application Error Count: (Assumes your application pushes a custom metric for errors).
+o	Recent Application Logs: A log widget showing the latest application logs.
+**2.	EmployeeApp-ApplicationHealth**:
+o	Application Performance: Custom metrics like Average and P90 Request Duration, and Total Errors (requires your Flask app to publish these custom metrics).
+o	ECS Service Health: Running Task Count, CPU Utilization, Memory Utilization for the ECS service.
+o	Recent Application Errors in Logs: A log widget filtered to show only error/exception messages from your application logs.
+**3.	EmployeeApp-DatabasePerformance**:
+o	RDS Core Performance: CPU Utilization, Database Connections, Free Storage Space.
+o	RDS I/O Performance: Read/Write IOPS, Read/Write Latency.
+o	RDS Network Throughput: Network Receive/Transmit Throughput.
+ALB Access Logs
+•	The Application Load Balancer is configured to deliver detailed access logs to an S3 bucket (employee-app-alb-logs-<ACCOUNT_ID>). These logs can be analyzed using AWS Athena for insights into traffic patterns, errors, and user behavior.
+•	A lifecycle policy is applied to the S3 bucket to automatically expire logs after 90 days (customizable).
 
 # Security Considerations
 VPC Private Subnets: All core application components (ECS tasks, RDS) are isolated in private subnets.
