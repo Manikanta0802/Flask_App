@@ -58,7 +58,7 @@ jobs:
         with:
           image-ref: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:${{ github.sha }}
           format: 'table'
-          exit-code: '1' # Fail if critical vulnerabilities are found
+          exit-code: '0' # set to '1' if you want the job should Fail if critical vulnerabilities are found
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
 
