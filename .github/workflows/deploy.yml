@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main # Trigger on pushes to the main branch
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-south-1 # Your AWS region
