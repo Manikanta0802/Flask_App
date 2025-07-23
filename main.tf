@@ -720,7 +720,7 @@ resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
         "properties" = {
           "metrics" = [
             # Example: ALB Request Count
-            [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.employee_app_alb.id ],
+            [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.employee-app-alb.id ],
             # Example: ECS Service CPU Utilization
             [ "AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.employee_app_cluster.name, "ServiceName", aws_ecs_service.employee_app_service.name ],
             # Example: RDS CPU Utilization
