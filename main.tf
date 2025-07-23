@@ -5,7 +5,7 @@
 # with the actual names of your S3 bucket and DynamoDB table
 terraform {
   backend "s3" {
-    bucket         = "employee-app_terraform_state"
+    bucket         = "employee-app-terraform-state"
     key            = "employee-app/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true
@@ -472,7 +472,7 @@ resource "aws_ecs_task_definition" "employee_app_task" {
 
 # --- Application Load Balancer (ALB) ---
 resource "aws_lb" "employee_app_alb" {
-  name               = "employee_app_alb"
+  name               = "employee-app-alb"
   internal           = false # Publicly facing
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
@@ -483,7 +483,7 @@ resource "aws_lb" "employee_app_alb" {
   ]
 
   tags = {
-    Name = "employee_app_alb"
+    Name = "employee-app-alb"
   }
 }
 
@@ -656,10 +656,10 @@ resource "aws_ecs_task_definition" "db_init_task" {
   container_definitions    = jsonencode([
     {
       name      = "db-init-container"
-      image     = "public.ecr.aws/bitnami/postgresql-client:17.0" # A small image with psql client
+      image = "public.ecr.aws/docker/library/postgres:16-alpine"
       # The command runs psql to create the table if it doesn't exist.
       # PGPASSWORD environment variable is used by psql for non-interactive password.
-      command   = ["/bin/sh", "-c", "/usr/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
+      command   = ["/bin/sh", "-c", "/usr/local/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
       environment = [
         {
           name  = "DB_HOST"
