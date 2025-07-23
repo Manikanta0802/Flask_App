@@ -268,7 +268,7 @@ resource "aws_security_group" "ecs_fargate_sg" {
   # Fargate tasks will need outbound access to ECR, Secrets Manager, etc. via NAT Gateway
   egress {
     from_port   = 0
-    to_to       = 0
+    to_port       = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
