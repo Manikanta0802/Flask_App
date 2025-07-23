@@ -9,9 +9,9 @@ variable "aws_region" {
 variable "my_ip_cidr" {
   description = "Your public IP address in CIDR format for SSH access (e.g., 203.0.113.45/32)"
   type        = string
-  # WARNING: Change this to your actual IP for production!
-  default     = "0.0.0.0/0"
+  default     = "0.0.0.0/0" # WARNING: Change this to your actual IP for production!
 }
+
 
 variable "db_master_username" {
   description = "Master username for the RDS PostgreSQL database"
