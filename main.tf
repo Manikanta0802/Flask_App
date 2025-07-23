@@ -1,24 +1,220 @@
 # main.tf
 
+# Configure Terraform to use an S3 backend for state storage
+# REPLACE 'your-terraform-state-bucket-unique-name' and 'your-terraform-state-lock-table'
+# with the actual names of your S3 bucket and DynamoDB table
+terraform {
+  backend "s3" {
+    bucket         = "your-terraform-state-bucket-unique-name" # <--- REPLACE THIS
+    key            = "employee-app/terraform.tfstate"
+    region         = "ap-south-1"
+    encrypt        = true
+    dynamodb_table = "your-terraform-state-lock-table" # <--- REPLACE THIS
+  }
+}
+
 provider "aws" {
-  region = "ap-south-1" # Your AWS Region
+  region = var.aws_region
 }
 
-# --- Data Source for VPC ID and Subnet ---
-data "aws_subnet" "selected_subnet" {
-  id = var.subnet_id_az1
+# --- Data Source for Latest Amazon Linux 2 AMI (for Bastion) ---
+data "aws_ami" "amazon_linux_2_ami" {
+  owners      = ["amazon"]
+  most_recent = true
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
-data "aws_vpc" "selected" {
-  id = data.aws_subnet.selected_subnet.vpc_id
+# --- Current AWS Caller Identity (used for ARN construction) ---
+data "aws_caller_identity" "current" {}
+
+
+# --- VPC ---
+resource "aws_vpc" "employee_app_vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "EmployeeAppVPC"
+  }
 }
+
+# --- Internet Gateway ---
+resource "aws_internet_gateway" "employee_app_igw" {
+  vpc_id = aws_vpc.employee_app_vpc.id
+
+  tags = {
+    Name = "EmployeeAppIGW"
+  }
+}
+
+# --- Public Subnets ---
+resource "aws_subnet" "public_subnet_az1" {
+  vpc_id            = aws_vpc.employee_app_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "${var.aws_region}a"
+  map_public_ip_on_launch = true # Instances in this subnet get public IPs
+
+  tags = {
+    Name = "EmployeeAppPublicSubnet-AZ1"
+  }
+}
+
+resource "aws_subnet" "public_subnet_az2" {
+  vpc_id            = aws_vpc.employee_app_vpc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "${var.aws_region}b"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "EmployeeAppPublicSubnet-AZ2"
+  }
+}
+
+# --- Private Subnets ---
+resource "aws_subnet" "private_subnet_az1" {
+  vpc_id            = aws_vpc.employee_app_vpc.id
+  cidr_block        = "10.0.10.0/24"
+  availability_zone = "${var.aws_region}a"
+  map_public_ip_on_launch = false # Instances in this subnet do NOT get public IPs
+
+  tags = {
+    Name = "EmployeeAppPrivateSubnet-AZ1"
+  }
+}
+
+resource "aws_subnet" "private_subnet_az2" {
+  vpc_id            = aws_vpc.employee_app_vpc.id
+  cidr_block        = "10.0.11.0/24"
+  availability_zone = "${var.aws_region}b"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "EmployeeAppPrivateSubnet-AZ2"
+  }
+}
+
+# --- NAT Gateway ---
+resource "aws_eip" "nat_gateway_eip" {
+  domain = "vpc"
+
+  tags = {
+    Name = "EmployeeAppNatGW-EIP"
+  }
+}
+
+resource "aws_nat_gateway" "employee_app_nat_gw" {
+  allocation_id = aws_eip.nat_gateway_eip.id
+  subnet_id     = aws_subnet.public_subnet_az1.id # Place NAT GW in a public subnet
+
+  tags = {
+    Name = "EmployeeAppNatGW"
+  }
+}
+
+# --- Route Tables ---
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.employee_app_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.employee_app_igw.id
+  }
+
+  tags = {
+    Name = "EmployeeAppPublicRT"
+  }
+}
+
+resource "aws_route_table_association" "public_subnet_az1_rt_assoc" {
+  subnet_id      = aws_subnet.public_subnet_az1.id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+resource "aws_route_table_association" "public_subnet_az2_rt_assoc" {
+  subnet_id      = aws_subnet.public_subnet_az2.id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+resource "aws_route_table" "private_route_table_az1" {
+  vpc_id = aws_vpc.employee_app_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
+  }
+
+  tags = {
+    Name = "EmployeeAppPrivateRT-AZ1"
+  }
+}
+
+resource "aws_route_table_association" "private_subnet_az1_rt_assoc" {
+  subnet_id      = aws_subnet.private_subnet_az1.id
+  route_table_id = aws_route_table.private_route_table_az1.id
+}
+
+resource "aws_route_table" "private_route_table_az2" {
+  vpc_id = aws_vpc.employee_app_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
+  }
+
+  tags = {
+    Name = "EmployeeAppPrivateRT-AZ2"
+  }
+}
+
+resource "aws_route_table_association" "private_subnet_az2_rt_assoc" {
+  subnet_id      = aws_subnet.private_subnet_az2.id
+  route_table_id = aws_route_table.private_route_table_az2.id
+}
+
 
 # --- Security Groups ---
 
-resource "aws_security_group" "ec2_sg" {
-  name        = "employee_app_ec2_sg"
-  description = "Allow HTTP, SSH, and App traffic to EC2 instance"
-  vpc_id      = data.aws_vpc.selected.id
+resource "aws_security_group" "bastion_sg" {
+  name        = "employee_app_bastion_sg"
+  description = "Allow SSH to bastion host"
+  vpc_id      = aws_vpc.employee_app_vpc.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr] # Allow SSH from your IP
+    description = "Allow SSH from specific IP"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"] # Allow all outbound for updates, etc.
+  }
+
+  tags = {
+    Name = "employee_app_bastion_sg"
+  }
+}
+
+resource "aws_security_group" "alb_sg" {
+  name        = "employee_app_alb_sg"
+  description = "Allow HTTP/HTTPS to ALB"
+  vpc_id      = aws_vpc.employee_app_vpc.id
 
   ingress {
     from_port   = 80
@@ -29,51 +225,73 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   ingress {
-    from_port   = 22
-    to_port     = 22
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [var.my_ip_cidr] # IMPORTANT: Restrict SSH to your IP!
-    description = "Allow SSH access from specified IP"
-  }
-
-  ingress {
-    from_port   = 8000 # Port for your Flask app
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Allow app traffic on port 8000 from anywhere
-    description = "Allow app traffic on port 8000"
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1" # Allow all outbound traffic
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "employee_app_ec2_sg"
-  }
-}
-
-resource "aws_security_group" "rds_sg" {
-  name        = "employee_app_rds_sg"
-  description = "Allow RDS PostgreSQL traffic only from EC2 SG"
-  vpc_id      = data.aws_vpc.selected.id
-
-  ingress {
-    from_port       = 5432 # PostgreSQL default port
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ec2_sg.id] # Allow from EC2 security group only
-    description     = "Allow PostgreSQL access from EC2 instances"
+    cidr_blocks = ["0.0.0.0/0"] # Allow HTTPS from anywhere (if you add SSL later)
+    description = "Allow HTTPS access"
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] # RDS might need to talk to S3 for snapshots etc.
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "employee_app_alb_sg"
+  }
+}
+
+resource "aws_security_group" "ecs_fargate_sg" {
+  name        = "employee_app_ecs_fargate_sg"
+  description = "Allow traffic from ALB to Fargate tasks, and outbound to RDS and internet"
+  vpc_id      = aws_vpc.employee_app_vpc.id
+
+  ingress {
+    from_port       = 8000 # Your application's container port
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id] # Allow traffic only from ALB
+    description     = "Allow app traffic from ALB"
+  }
+
+  # Fargate tasks will need outbound access to ECR, Secrets Manager, etc. via NAT Gateway
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "employee_app_ecs_fargate_sg"
+  }
+}
+
+resource "aws_security_group" "rds_sg" {
+  name        = "employee_app_rds_sg"
+  description = "Allow RDS PostgreSQL traffic only from ECS Fargate tasks and DB Init Task"
+  vpc_id      = aws_vpc.employee_app_vpc.id
+
+  ingress {
+    from_port       = 5432 # PostgreSQL default port
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_fargate_sg.id] # Allow from ECS Fargate security group
+    description     = "Allow PostgreSQL access from ECS Fargate tasks"
+  }
+
+  # Also allow the DB Init Task to connect if its SG is distinct, or include its specific source.
+  # For simplicity, if the DB Init Task runs using the same fargate SG, it's covered.
+  # If it were to use a different SG, you'd add another ingress block here.
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"] # Allow outbound for RDS to communicate with other AWS services (e.g. for backups)
   }
 
   tags = {
@@ -85,9 +303,10 @@ resource "aws_security_group" "rds_sg" {
 
 resource "aws_db_subnet_group" "employees_db_subnet_group" {
   name       = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
+  # RDS subnets should be in at least two different AZs and be private
   subnet_ids = [
-    var.subnet_id_az1,
-    var.subnet_id_az2
+    aws_subnet.private_subnet_az1.id,
+    aws_subnet.private_subnet_az2.id
   ]
 
   tags = {
@@ -99,7 +318,6 @@ resource "random_id" "db_subnet_group_suffix" {
   byte_length = 4
 }
 
-
 resource "aws_db_instance" "employees_db" {
   identifier           = "employees-db-${random_id.db_instance_suffix.hex}"
   engine               = "postgres"
@@ -108,13 +326,13 @@ resource "aws_db_instance" "employees_db" {
   allocated_storage    = 20
   storage_type         = "gp2"
   db_name              = "employees"
-  username             = var.db_master_username # Master username for initial access
-  password             = var.db_master_password # Master password for initial access
+  username             = var.db_master_username
+  password             = var.db_master_password
   skip_final_snapshot  = true
-  multi_az             = false
+  multi_az             = false # Set to true for production for high availability
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   db_subnet_group_name = aws_db_subnet_group.employees_db_subnet_group.name
-  publicly_accessible  = true
+  publicly_accessible  = false # RDS should NOT be publicly accessible
 
   tags = {
     Name = "employees-db"
@@ -128,208 +346,361 @@ resource "random_id" "db_instance_suffix" {
 # --- AWS Secrets Manager for DB Credentials ---
 
 resource "aws_secretsmanager_secret" "db_credentials" {
-  name        = "employee_app/db_credentials_new_2"
+  name        = var.db_secret_name
   description = "Database credentials for the employee application"
 
   tags = {
     Name = "EmployeeAppDBCredentials"
   }
 }
+
 resource "aws_secretsmanager_secret_version" "db_credentials_version" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
     username = var.db_master_username,
     password = var.db_master_password,
     engine   = "postgres",
-    host     = aws_db_instance.employees_db.address, # Use .address for endpoint without port
-    port     = aws_db_instance.employees_db.port,    # RDS returns integer port
+    host     = aws_db_instance.employees_db.address,
+    port     = aws_db_instance.employees_db.port,
     dbname   = aws_db_instance.employees_db.db_name
   })
 }
 
-# --- IAM Role for EC2 to access Secrets Manager ---
-resource "aws_iam_role" "ec2_role" {
-  name = "ec2_app_access_role_${random_id.role_suffix.hex}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        },
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-resource "random_id" "role_suffix" {
-  byte_length = 4
-}
-
-resource "aws_iam_role_policy" "ec2_role_policy" {
-  role = aws_iam_role.ec2_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect   = "Allow",
-        Action   = "secretsmanager:GetSecretValue",
-        Resource = aws_secretsmanager_secret.db_credentials.arn # Allow access to specific secret
-      }
-      # No S3 permissions needed here as we are using Git to fetch files
-      # You might add ECR permissions later if you push/pull Docker images from ECR
-    ]
-  })
-}
-
-# IAM Instance Profile
-resource "aws_iam_instance_profile" "ec2_instance_profile" {
-  name = "ec2_app_instance_profile_${random_id.instance_profile_suffix.hex}"
-  role = aws_iam_role.ec2_role.name
-}
-
-resource "random_id" "instance_profile_suffix" {
-  byte_length = 4
-}
-
-
-# --- EC2 instance ---
-resource "aws_instance" "employee_app" {
-  ami                         = var.instance_ami
-  instance_type               = "t2.micro"
-  key_name                    = var.key_pair_name
-  subnet_id                   = var.subnet_id_az1
-  vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
-  associate_public_ip_address = true
-  iam_instance_profile        = aws_iam_instance_profile.ec2_instance_profile.name
-
-  # User Data Script for Docker setup with Git cloning
-  user_data = <<-EOF
-#!/bin/bash
-sudo yum update -y
-
-# --- Install Git, Docker, and necessary tools ---
-# Enable a newer PostgreSQL client version using amazon-linux-extras
-sudo amazon-linux-extras enable postgresql13 # Enables PostgreSQL 13 client
-sudo yum clean metadata # Clean yum cache after enabling new extras
-
-sudo yum install -y git docker jq postgresql # git, docker, jq, and postgresql client for DB setup (now with newer libpq)
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -a -G docker ec2-user # Add ec2-user to the docker group
-
-# Attempt to apply group changes immediately (best practice for scripts)
-newgrp docker || true
-
-
-# --- Retrieve DB Credentials from Secrets Manager ---
-export AWS_DEFAULT_REGION="ap-south-1" # <--- IMPORTANT: REPLACE WITH YOUR ACTUAL AWS REGION
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id employee_app/db_credentials_new_2 --query SecretString --output text --region ap-south-1)
-
-DB_HOST=$(echo $SECRET_JSON | jq -r '.host')
-DB_USER=$(echo $SECRET_JSON | jq -r '.username')
-DB_PASSWORD=$(echo $SECRET_JSON | jq -r '.password')
-DB_NAME=$(echo $SECRET_JSON | jq -r '.dbname')
-
-echo "DB_HOST: $DB_HOST"
-echo "DB_USER: $DB_USER"
-echo "DB_NAME: $DB_NAME"
-
-
-# --- Initial Database Setup (still on EC2 host, outside Docker) ---
-# This ensures the database and table exist before the app tries to connect
-export PGSSLMODE=require
-
-# 1. Wait for PostgreSQL to be available (connect as master user to 'postgres' database)
-ATTEMPTS=0
-MAX_ATTEMPTS=30
-echo "Waiting for PostgreSQL to be available as master user..."
-until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -c '\q' || [ $ATTEMPTS -eq $MAX_ATTEMPTS ]; do
-    echo "Waiting for PostgreSQL to be available... (Attempt $((ATTEMPTS+1)) of $MAX_ATTEMPTS)"
-    sleep 2
-    ATTEMPTS=$((ATTEMPTS+1))
-done
-
-if [ $ATTEMPTS -eq $MAX_ATTEMPTS ]; then
-    echo "ERROR: PostgreSQL did not become available as master user after $MAX_ATTEMPTS attempts."
-    exit 1
-fi
-
-echo "PostgreSQL is available. Proceeding with initial setup using master user."
-
-# 2. Create 'employees' database if it does not exist (as master user)
-echo "Creating database '$DB_NAME' if it does not exist..."
-# FIX: Use a robust conditional database creation
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
-
-
-# 3. Create 'employees' table (as master user)
-echo "Creating 'employees' table as master user..."
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c "
-CREATE TABLE IF NOT EXISTS employees (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100),
-    employee_id VARCHAR(100) UNIQUE,
-    email VARCHAR(100) UNIQUE
-);
-"
-
-# --- Git Clone, Docker Image Build, and Run on EC2 ---
-
-# Define Git Repository URL (from your GitHub repo)
-GIT_REPO_URL="https://github.com/mani852000/Employee_Web.git" # <--- YOUR GITHUB REPO URL
-
-# Clone the repository into a dedicated directory
-# The directory name will be the repo name by default (Employee_Web)
-git clone $GIT_REPO_URL /home/ec2-user/employee-app-repo
-
-# Navigate into the cloned repository directory for Docker build
-cd /home/ec2-user/employee-app-repo
-
-echo "Git repository cloned to /home/ec2-user/employee-app-repo."
-
-# Build the Docker image
-# Name the image 'employee-app'
-sudo docker build -t employee-app . # Use sudo because the build process needs root permissions
-
-echo "Docker image 'employee-app' built on EC2."
-
-# Run the Docker container
-sudo docker run -d \
-    -p 8000:8000 \
-    --name employee-app-container \
-    --restart=always \
-    -e DB_HOST="$${DB_HOST}" \
-    -e DB_USER="$${DB_USER}" \
-    -e DB_PASSWORD="$${DB_PASSWORD}" \
-    -e DB_NAME="$${DB_NAME}" \
-    employee-app
-
-echo "Docker container for employee-app started on EC2."
-
-EOF
+# --- ECR Repository for Docker Images ---
+resource "aws_ecr_repository" "employee_app_repo" {
+  name                 = "employee-app"
+  image_tag_mutability = "MUTABLE" # Or IMMUTABLE for stricter versioning
+  image_scanning_configuration {
+    scan_on_push = true # Enable vulnerability scanning on push
+  }
 
   tags = {
-    Name = "EmployeeAppInstance"
+    Name = "employee-app-ecr"
   }
 }
 
-# Outputs
-output "employee_app_public_ip" {
-  value       = aws_instance.employee_app.public_ip
-  description = "Public IP address of the Employee App EC2 instance"
+# --- ECS Cluster ---
+resource "aws_ecs_cluster" "employee_app_cluster" {
+  name = "employee-app-cluster"
+
+  tags = {
+    Name = "employee-app-cluster"
+  }
 }
 
-output "employee_app_url" {
-  value       = "http://${aws_instance.employee_app.public_ip}:8000" # Include port 8000 for clarity
-  description = "URL to access the Employee App"
+# --- ECS Task Execution Role (for Fargate to pull images and write logs) ---
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "employee_app_ecs_task_execution_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "employee_app_ecs_task_execution_role"
+  }
 }
 
-output "rds_endpoint" {
-  value       = aws_db_instance.employees_db.endpoint
-  description = "Endpoint for the RDS PostgreSQL database"
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# --- ECS Task Definition (for the main application) ---
+resource "aws_ecs_task_definition" "employee_app_task" {
+  family                   = "employee-app-task"
+  container_definitions    = jsonencode([
+    {
+      name      = "employee-app-container"
+      image     = "${aws_ecr_repository.employee_app_repo.repository_url}:latest" # Image will be pushed by CI/CD
+      cpu       = 256 # Fargate CPU units
+      memory    = 512 # Fargate Memory units
+      essential = true
+      portMappings = [
+        {
+          containerPort = 8000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [ # Pass DB credentials as environment variables to the container
+        {
+          name  = "DB_HOST"
+          value = aws_db_instance.employees_db.address
+        },
+        {
+          name  = "DB_USER"
+          value = var.db_master_username
+        },
+        {
+          name  = "DB_PASSWORD"
+          value = var.db_master_password
+        },
+        {
+          name  = "DB_NAME"
+          value = aws_db_instance.employees_db.db_name
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/employee-app"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+  requires_compatibilities = ["FARGATE"] # Now using Fargate
+  network_mode             = "awsvpc" # Required for Fargate
+  cpu                      = "256" # Total CPU for the task
+  memory                   = "512" # Total Memory for the task
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+
+  tags = {
+    Name = "employee-app-task"
+  }
+}
+
+# --- Application Load Balancer (ALB) ---
+resource "aws_lb" "employee_app_alb" {
+  name               = "employee_app_alb"
+  internal           = false # Publicly facing
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  # ALB must be in public subnets
+  subnets            = [
+    aws_subnet.public_subnet_az1.id,
+    aws_subnet.public_subnet_az2.id
+  ]
+
+  tags = {
+    Name = "employee_app_alb"
+  }
+}
+
+resource "aws_lb_target_group" "employee_app_tg" {
+  name        = "employee-app-tg"
+  port        = 8000 # Container port
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.employee_app_vpc.id
+  target_type = "ip" # Required for Fargate tasks (they register by IP)
+
+  health_check {
+    path                = "/" # Or a specific health check endpoint like /health
+    protocol            = "HTTP"
+    matcher             = "200-299"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = "employee-app-tg"
+  }
+}
+
+resource "aws_lb_listener" "http_listener" {
+  load_balancer_arn = aws_lb.employee_app_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.employee_app_tg.arn
+  }
+}
+
+# --- ECS Service ---
+resource "aws_ecs_service" "employee_app_service" {
+  name            = "employee-app-service"
+  cluster         = aws_ecs_cluster.employee_app_cluster.id
+  task_definition = aws_ecs_task_definition.employee_app_task.arn
+  desired_count   = 1 # Start with 1, can be scaled later
+  launch_type     = "FARGATE"
+
+  # Network configuration for Fargate tasks
+  network_configuration {
+    subnets          = [aws_subnet.private_subnet_az1.id, aws_subnet.private_subnet_az2.id] # Tasks in private subnets
+    security_groups  = [aws_security_group.ecs_fargate_sg.id]
+    assign_public_ip = false # Fargate tasks in private subnets should not have public IPs
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.employee_app_tg.arn
+    container_name   = "employee-app-container"
+    container_port   = 8000
+  }
+
+  # Ensure the listener is ready before the service tries to register
+  depends_on = [
+    aws_lb_listener.http_listener
+  ]
+
+  tags = {
+    Name = "employee-app-service"
+  }
+}
+
+# --- CloudWatch Log Group for ECS Task Logs ---
+resource "aws_cloudwatch_log_group" "ecs_app_logs" {
+  name              = "/ecs/employee-app" # Matches logConfiguration in task definition
+  retention_in_days = 7 # Adjust as needed
+
+  tags = {
+    Name = "employee-app-ecs-logs"
+  }
+}
+
+# --- Bastion Host EC2 ---
+resource "aws_instance" "bastion_host" {
+  ami                         = data.aws_ami.amazon_linux_2_ami.id # Standard Amazon Linux 2 AMI
+  instance_type               = "t2.micro"
+  key_name                    = var.key_pair_name
+  subnet_id                   = aws_subnet.public_subnet_az1.id # Place Bastion in a public subnet
+  vpc_security_group_ids      = [aws_security_group.bastion_sg.id]
+  associate_public_ip_address = true # Bastion needs a public IP
+  # User data for basic setup, though not strictly necessary for a simple bastion
+  user_data = <<-EOF
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install -y telnet net-tools
+              EOF
+
+  tags = {
+    Name = "EmployeeAppBastionHost"
+  }
+}
+
+# --- IAM Role for the DB Init Fargate Task ---
+resource "aws_iam_role" "db_init_task_role" {
+  name = "employee_app_db_init_task_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "employee_app_db_init_task_role"
+  }
+}
+
+# --- Policy for the DB Init Fargate Task to connect to RDS and get secrets ---
+resource "aws_iam_policy" "db_init_task_policy" {
+  name        = "employee_app_db_init_task_policy"
+  description = "Policy for DB Init Fargate task to access RDS and Secrets Manager"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "rds-db:connect",
+          "secretsmanager:GetSecretValue"
+        ],
+        Resource = [
+          aws_db_instance.employees_db.arn,
+          aws_secretsmanager_secret.db_credentials.arn
+        ]
+      },
+      { # Permissions for CloudWatch Logs for the DB Init Task
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/db-init-task:*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "db_init_task_role_policy_attachment" {
+  role       = aws_iam_role.db_init_task_role.name
+  policy_arn = aws_iam_policy.db_init_task_policy.arn
+}
+
+# --- Task Definition for the DB Init Fargate Task ---
+# This task will run a simple image with psql client to initialize the DB.
+resource "aws_ecs_task_definition" "db_init_task" {
+  family                   = "employee-app-db-init-task"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  # Reusing ecs_task_execution_role for pulling image/logging if needed.
+  # The db_init_task_role provides specific permissions for DB access.
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.db_init_task_role.arn
+
+  container_definitions    = jsonencode([
+    {
+      name      = "db-init-container"
+      image     = "public.ecr.aws/bitnami/postgresql-client:17.0" # A small image with psql client
+      # The command runs psql to create the table if it doesn't exist.
+      # PGPASSWORD environment variable is used by psql for non-interactive password.
+      command   = ["/bin/sh", "-c", "/usr/bin/psql -h \"$DB_HOST\" -U \"$DB_USER\" -d \"$DB_NAME\" -p \"$DB_PORT\" -w -c \"CREATE TABLE IF NOT EXISTS employees (id SERIAL PRIMARY KEY, name VARCHAR(100), employee_id VARCHAR(100) UNIQUE, email VARCHAR(100) UNIQUE);\""]
+      environment = [
+        {
+          name  = "DB_HOST"
+          value = aws_db_instance.employees_db.address
+        },
+        {
+          name  = "DB_USER"
+          value = var.db_master_username
+        },
+        {
+          name  = "DB_NAME"
+          value = aws_db_instance.employees_db.db_name
+        },
+        {
+          name = "DB_PORT"
+          value = tostring(aws_db_instance.employees_db.port)
+        }
+        # PGPASSWORD is passed via task overrides in GitHub Actions for security
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/db-init-task"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "db-init"
+        }
+      }
+    }
+  ])
+
+  tags = {
+    Name = "employee-app-db-init-task"
+  }
+}
+
+# --- CloudWatch Log Group for DB Init Task Logs ---
+resource "aws_cloudwatch_log_group" "db_init_task_logs" {
+  name              = "/ecs/db-init-task"
+  retention_in_days = 7
+
+  tags = {
+    Name = "employee-app-db-init-logs"
+  }
 }
