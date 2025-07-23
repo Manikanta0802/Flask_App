@@ -1,5 +1,6 @@
 # main.tf
 
+# Configure Terraform to use an S3 backend for state storage
 terraform {
   backend "s3" {
     bucket         = "employee-app-terraform-state"
@@ -7,6 +8,16 @@ terraform {
     region         = "ap-south-1"
     encrypt        = true
     dynamodb_table = "terraform-state-lock-table"
+  }
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    random = { # Declare the random provider
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -148,7 +159,7 @@ resource "aws_route_table" "private_route_table_az1" {
   vpc_id = aws_vpc.employee_app_vpc.id
 
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
   }
 
@@ -166,7 +177,7 @@ resource "aws_route_table" "private_route_table_az2" {
   vpc_id = aws_vpc.employee_app_vpc.id
 
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.employee_app_nat_gw.id
   }
 
@@ -257,7 +268,7 @@ resource "aws_security_group" "ecs_fargate_sg" {
   # Fargate tasks will need outbound access to ECR, Secrets Manager, etc. via NAT Gateway
   egress {
     from_port   = 0
-    to_port     = 0
+    to_to       = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -280,9 +291,14 @@ resource "aws_security_group" "rds_sg" {
     description     = "Allow PostgreSQL access from ECS Fargate tasks"
   }
 
-  # Also allow the DB Init Task to connect if its SG is distinct, or include its specific source.
-  # For simplicity, if the DB Init Task runs using the same fargate SG, it's covered.
-  # If it were to use a different SG, you'd add another ingress block here.
+  # Add ingress from Bastion Host for direct DB access
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.bastion_sg.id]
+    description     = "Allow PostgreSQL access from Bastion Host"
+  }
 
   egress {
     from_port   = 0
@@ -298,8 +314,13 @@ resource "aws_security_group" "rds_sg" {
 
 # --- RDS Database (PostgreSQL) ---
 
+# This random_id must be declared before aws_db_subnet_group
+resource "random_id" "db_subnet_group_suffix" {
+  byte_length = 4
+}
+
 resource "aws_db_subnet_group" "employees_db_subnet_group" {
-  name       = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
+  name        = "employees-db-subnet-group-${random_id.db_subnet_group_suffix.hex}"
   # RDS subnets should be in at least two different AZs and be private
   subnet_ids = [
     aws_subnet.private_subnet_az1.id,
@@ -310,6 +331,7 @@ resource "aws_db_subnet_group" "employees_db_subnet_group" {
     Name = "employees-db-subnet-group"
   }
 }
+
 
 # Generate a strong, random password for the RDS database
 resource "random_password" "db_password" {
@@ -326,20 +348,20 @@ resource "random_password" "db_password" {
 }
 
 resource "aws_db_instance" "employees_db" {
-  identifier           = "employees-db-${random_id.db_instance_suffix.hex}"
-  engine               = "postgres"
-  engine_version       = "17.4" # Specify a PostgreSQL version
-  instance_class       = "db.t3.micro"
-  allocated_storage    = 20
-  storage_type         = "gp2"
-  db_name              = "employees"
-  username             = var.db_master_username
-  password             = var.db_master_password
-  skip_final_snapshot  = true
-  multi_az             = false # Set to true for production for high availability
+  identifier            = "employees-db-${random_id.db_instance_suffix.hex}"
+  engine                = "postgres"
+  engine_version        = "17.4" # Specify a PostgreSQL version
+  instance_class        = "db.t3.micro"
+  allocated_storage     = 20
+  storage_type          = "gp2"
+  db_name               = "employees"
+  username              = var.db_master_username
+  password              = random_password.db_password.result # Use the generated password
+  skip_final_snapshot   = true
+  multi_az              = false # Set to true for production for high availability
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
-  db_subnet_group_name = aws_db_subnet_group.employees_db_subnet_group.name
-  publicly_accessible  = false # RDS should NOT be publicly accessible
+  db_subnet_group_name  = aws_db_subnet_group.employees_db_subnet_group.name
+  publicly_accessible   = false # RDS should NOT be publicly accessible
 
   tags = {
     Name = "employees-db"
@@ -366,7 +388,7 @@ resource "aws_secretsmanager_secret_version" "db_credentials_version" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
     username = var.db_master_username,
-    password = random_password.db_password.result, 
+    password = random_password.db_password.result,
     engine   = "postgres",
     host     = aws_db_instance.employees_db.address,
     port     = aws_db_instance.employees_db.port,
@@ -542,11 +564,56 @@ resource "aws_lb" "employee_app_alb" {
     aws_subnet.public_subnet_az1.id,
     aws_subnet.public_subnet_az2.id
   ]
+  # Add ALB access logs to S3
+  access_logs {
+    bucket = aws_s3_bucket.alb_logs_bucket.id
+    prefix = "alb-access-logs" # Optional prefix
+    enabled = true
+  }
 
   tags = {
     Name = "employee-app-alb"
   }
 }
+
+# S3 bucket for ALB access logs
+resource "aws_s3_bucket" "alb_logs_bucket" {
+  bucket = "employee-app-alb-logs-${data.aws_caller_identity.current.account_id}" # Unique bucket name
+  acl    = "private" # Or other suitable ACL/ownership controls
+  # Add a bucket policy to allow ALB to write logs to it
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "delivery.logs.amazonaws.com"
+        }
+        Action = "s3:PutObject"
+        Resource = "arn:aws:s3:::employee-app-alb-logs-${data.aws_caller_identity.current.account_id}/alb-access-logs/*" # Adjust prefix
+      },
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "delivery.logs.amazonaws.com"
+        }
+        Action = "s3:GetBucketAcl"
+        Resource = "arn:aws:s3:::employee-app-alb-logs-${data.aws_caller_identity.current.account_id}"
+      }
+    ]
+  })
+  lifecycle_rule { # Optional: automatically expire logs after a period
+    id      = "log_retention"
+    enabled = true
+    expiration {
+      days = 90
+    }
+  }
+  tags = {
+    Name = "employee-app-alb-logs-bucket"
+  }
+}
+
 
 resource "aws_lb_target_group" "employee_app_tg" {
   name        = "employee-app-tg"
@@ -676,11 +743,13 @@ resource "aws_iam_policy" "db_init_task_policy" {
         Effect = "Allow",
         Action = [
           "rds-db:connect",
-          "secretsmanager:GetSecretValue"
+          "secretsmanager:GetSecretValue",
+          "kms:Decrypt" # Required if your secret is encrypted with a custom KMS key
         ],
         Resource = [
           aws_db_instance.employees_db.arn,
-          aws_secretsmanager_secret.db_credentials.arn
+          aws_secretsmanager_secret.db_credentials.arn,
+          # If a custom KMS key is used for Secrets Manager, its ARN should be here as well
         ]
       },
       { # Permissions for CloudWatch Logs for the DB Init Task
@@ -766,7 +835,7 @@ resource "aws_cloudwatch_log_group" "db_init_task_logs" {
   }
 }
 
-# --- CloudWatch Dashboards for DB Init Task Logs ---
+# --- CloudWatch Dashboard: EmployeeApp-Overview ---
 resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
   dashboard_name = "EmployeeApp-Overview"
   dashboard_body = jsonencode({
@@ -802,7 +871,7 @@ resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
         "height" = 6
         "properties" = {
           "metrics" = [
-            # Example: Custom Flask App Errors
+            # Example: Custom Flask App Errors (requires application to push this metric)
             [ "EmployeeApp/Flask", "ErrorCount", "Application", "EmployeeApp" ]
           ],
           "view"       = "timeSeries"
@@ -820,7 +889,7 @@ resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
         "width"  = 24
         "height" = 6
         "properties" = {
-          "query"       = "SOURCE '${aws_cloudwatch_log_group.employee_app_log_group.name}' | fields @timestamp, @message | sort @timestamp desc | limit 20"
+          "query"       = "SOURCE '${aws_cloudwatch_log_group.ecs_app_logs.name}' | fields @timestamp, @message | sort @timestamp desc | limit 20"
           "region"      = var.aws_region
           "title"       = "Recent Application Logs"
           "view"        = "table"
@@ -828,11 +897,9 @@ resource "aws_cloudwatch_dashboard" "employee_app_dashboard" {
       }
     ]
   })
-  tags = {
-    Name = "EmployeeApp-Overview"
-  }
 }
 
+# --- CloudWatch Dashboard: EmployeeApp-ApplicationHealth ---
 resource "aws_cloudwatch_dashboard" "employee_app_application_health_dashboard" {
   dashboard_name = "EmployeeApp-ApplicationHealth"
   dashboard_body = jsonencode({
@@ -894,11 +961,9 @@ resource "aws_cloudwatch_dashboard" "employee_app_application_health_dashboard" 
       }
     ]
   })
-  tags = {
-    Name = "EmployeeApp-ApplicationHealth-Dashboard"
-  }
 }
 
+# --- CloudWatch Dashboard: EmployeeApp-DatabasePerformance ---
 resource "aws_cloudwatch_dashboard" "employee_app_database_performance_dashboard" {
   dashboard_name = "EmployeeApp-DatabasePerformance"
   dashboard_body = jsonencode({
@@ -965,7 +1030,5 @@ resource "aws_cloudwatch_dashboard" "employee_app_database_performance_dashboard
       }
     ]
   })
-  tags = {
-    Name = "EmployeeApp-DatabasePerformance-Dashboard"
-  }
+
 }
