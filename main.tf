@@ -373,6 +373,7 @@ resource "aws_ecr_repository" "employee_app_repo" {
   image_scanning_configuration {
     scan_on_push = true # Enable vulnerability scanning on push
   }
+  force_delete = true
 
   tags = {
     Name = "employee-app-ecr"

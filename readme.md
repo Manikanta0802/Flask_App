@@ -159,7 +159,7 @@ ALB access log storage.
 DynamoDB: Used for Terraform state locking to prevent concurrent state modifications.
 
 
-## Observability and Monitoring
+## Monitoring and Logging
 Comprehensive monitoring and logging are set up to provide insights into the application and infrastructure health.
 ### CloudWatch Logs
 •**ECS Application Logs**: All standard output and error streams from your Flask application container are sent to the /ecs/employee-app CloudWatch Log Group.
@@ -215,6 +215,8 @@ Auto Scaling (ECS Service - Future Enhancement): Implement aws_appautoscaling_ta
 
 # Secret Management
 AWS Secrets Manager is the designated service for handling sensitive data.
+
+**IAM Permissions:** Specific IAM policies are attached to the ECS Task Roles to grant only secretsmanager:GetSecretValue and kms:Decrypt permissions on the respective secret ARN, adhering to the principle of least privilege.
 
 # Database Credentials:
 
