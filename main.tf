@@ -471,7 +471,7 @@ resource "aws_ecs_task_definition" "employee_app_task" {
 }
 
 # --- Application Load Balancer (ALB) ---
-resource "aws_lb" "employee_app_alb" {
+resource "aws_lb" "employee-app-alb" {
   name               = "employee-app-alb"
   internal           = false # Publicly facing
   load_balancer_type = "application"
