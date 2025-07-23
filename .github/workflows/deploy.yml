@@ -64,6 +64,7 @@ jobs:
 
   cd_infrastructure_and_db_init:
     runs-on: ubuntu-latest
+    # This job does NOT need any other jobs, it can run independently of the image build.
     permissions:
       id-token: write # Required for OIDC authentication with AWS
       contents: read # Required to checkout code for Terraform files
@@ -78,7 +79,7 @@ jobs:
       db_init_task_definition_arn: ${{ steps.get-tf-outputs.outputs.db_init_task_definition_arn }}
       db_init_task_role_arn: ${{ steps.get-tf-outputs.outputs.db_init_task_role_arn }}
       vpc_id: ${{ steps.get-tf-outputs.outputs.vpc_id }}
-      ecr_repository_url: ${{ steps.get-tf-outputs.outputs.ecr_repository_url }} # Useful for main app taskdef update later
+      # Removed ecr_repository_url output as it's not directly used by the application deployment job anymore
 
     steps:
       - name: Checkout code
@@ -110,7 +111,7 @@ jobs:
         run: |
           set +e # Don't exit immediately on error within this script
           echo "Attempting terraform plan to check for state lock..."
-          # Pass variables using TF_VAR_ prefix for plan command
+          # Pass variables using TF_VAR_ prefix for plan command.
           PLAN_OUTPUT=$(TF_VAR_db_master_username="${{ secrets.DB_MASTER_USERNAME }}" \
                         TF_VAR_my_ip_cidr="${{ secrets.MY_IP_CIDR }}" \
                         TF_VAR_key_pair_name="${{ secrets.KEY_PAIR_NAME }}" \
@@ -146,26 +147,33 @@ jobs:
           fi
           set -e # Re-enable exit on error
 
-
       - name: Terraform Apply (Provision/Update Infrastructure)
+        # This step will only run if the previous step successfully handled the lock (or no lock was present)
+        if: steps.terraform_plan_lock_handler.outputs.lock_handled == 'true'
         run: |
+          echo "Proceeding with terraform apply..."
           terraform apply -auto-approve \
             -var="db_master_username=${{ secrets.DB_MASTER_USERNAME }}" \
+            -var="my_ip_cidr=${{ secrets.MY_IP_CIDR }}" \
+            -var="key_pair_name=${{ secrets.KEY_PAIR_NAME }}"
 
       - name: Get Terraform Outputs
         id: get-tf-outputs # ID for this step to retrieve its outputs
+        # This step also needs to be conditional on successful lock handling and apply
+        if: steps.terraform_plan_lock_handler.outputs.lock_handled == 'true'
         run: |
-          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_OUTPUT
-          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_OUTPUT
-          echo "private_subnet_az1_id=$(terraform output -raw private_subnet_az1_id)" >> $GITHUB_OUTPUT
-          echo "private_subnet_az2_id=$(terraform output -raw private_subnet_az2_id)" >> $GITHUB_OUTPUT
-          echo "ecs_fargate_sg_id=$(terraform output -raw ecs_fargate_sg_id)" >> $GITHUB_OUTPUT
-          echo "db_init_task_definition_arn=$(terraform output -raw db_init_task_definition_arn)" >> $GITHUB_OUTPUT
-          echo "db_init_task_role_arn=$(terraform output -raw db_init_task_role_arn)" >> $GITHUB_OUTPUT
-          echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
-          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
+          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> "$GITHUB_OUTPUT"
+          echo "private_subnet_az1_id=$(terraform output -raw private_subnet_az1_id)" >> "$GITHUB_OUTPUT"
+          echo "private_subnet_az2_id=$(terraform output -raw private_subnet_az2_id)" >> "$GITHUB_OUTPUT"
+          echo "ecs_fargate_sg_id=$(terraform output -raw ecs_fargate_sg_id)" >> "$GITHUB_OUTPUT"
+          echo "db_init_task_definition_arn=$(terraform output -raw db_init_task_definition_arn)" >> "$GITHUB_OUTPUT"
+          echo "db_init_task_role_arn=$(terraform output -raw db_init_task_role_arn)" >> "$GITHUB_OUTPUT"
+          echo "vpc_id=$(terraform output -raw vpc_id)" >> "$GITHUB_OUTPUT"
 
       - name: Run DB Init Fargate Task
+        # This step also needs to be conditional on successful lock handling and apply
+        if: steps.terraform_plan_lock_handler.outputs.lock_handled == 'true'
         run: |
           TASK_ARN=$(aws ecs run-task \
             --cluster ${{ steps.get-tf-outputs.outputs.ecs_cluster_name }} \
