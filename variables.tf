@@ -34,5 +34,5 @@ variable "key_pair_name" {
 variable "db_secret_name" {
   description = "Name of the Secrets Manager secret for DB credentials"
   type        = string
-  default     = "employee_app/db_credentials_new_6"
+  default     = "employee_app/db_credentials_new_7"
 }
