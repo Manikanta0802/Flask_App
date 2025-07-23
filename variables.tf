@@ -19,12 +19,6 @@ variable "db_master_username" {
   default     = "pgadmin"
 }
 
-variable "db_master_password" {
-  description = "Master password for the RDS PostgreSQL database"
-  type        = string
-  sensitive   = true
-  default     = "PgAchala1234" # Stronger password recommended for production
-}
 
 variable "key_pair_name" {
   description = "Name of the EC2 Key Pair for SSH access"
