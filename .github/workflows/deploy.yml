@@ -27,7 +27,7 @@ jobs:
           python-version: '3.9'
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt # Assumes you have a requirements.txt file in your repo root
+        run: pip install -r app/requirements.txt # Assumes you have a requirements.txt file in your repo root
 
       #- name: Run unit tests
        # run: pytest # Assumes you use pytest for your tests. Make sure you have test files.
@@ -47,7 +47,7 @@ jobs:
       - name: Build and push Docker image to ECR
         uses: docker/build-push-action@v5
         with:
-          context: . # Looks for Dockerfile in the root of your repository
+          context: ./app # Looks for Dockerfile in the root of your repository
           push: true
           tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:latest,${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/employee-app:${{ github.sha }}
 
