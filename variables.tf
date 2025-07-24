@@ -30,9 +30,3 @@ variable "key_pair_name" {
   type        = string
   default     = "office-key" # Ensure this key pair exists in your AWS account
 }
-
-variable "db_secret_name" {
-  description = "Name of the Secrets Manager secret for DB credentials"
-  type        = string
-  default     = "employee_app/db_credentials_new_7"
-}

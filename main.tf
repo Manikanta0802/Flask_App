@@ -346,7 +346,7 @@ resource "random_id" "db_instance_suffix" {
 # --- AWS Secrets Manager for DB Credentials ---
 
 resource "aws_secretsmanager_secret" "db_credentials" {
-  name        = var.db_secret_name
+  name = "employee_app/${aws_db_instance.employees_db.identifier}_secrets" 
   description = "Database credentials for the employee application"
 
   tags = {
