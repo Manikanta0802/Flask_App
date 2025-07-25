@@ -195,7 +195,7 @@ resource "aws_ecs_task_definition" "db_init_task" {
       environment = [
         {
           name  = "DB_HOST"
-          value = var.db_endpoint
+          value = var.rds_instance_address
         },
         {
           name  = "DB_USER"

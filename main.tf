@@ -75,6 +75,7 @@ module "ecs" {
   ecs_fargate_sg_id     = module.security_groups.ecs_fargate_sg_id
   alb_tg_arn            = module.alb.target_group_arn
   ecr_repository_url    = module.ecr.repository_url
+  rds_instance_address  = module.rds.rds_instance_address
   db_endpoint           = module.rds.rds_endpoint
   db_name               = module.rds.db_name
   db_port               = module.rds.db_port

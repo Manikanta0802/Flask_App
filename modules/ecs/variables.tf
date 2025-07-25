@@ -23,6 +23,11 @@ variable "ecr_repository_url" {
   type        = string
 }
 
+variable "rds_instance_address" {
+  description = "Endpoint for the RDS PostgreSQL database"
+  type        = string
+}
+
 variable "db_endpoint" {
   description = "Endpoint for the RDS PostgreSQL database"
   type        = string

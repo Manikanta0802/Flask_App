@@ -8,6 +8,11 @@ output "rds_instance_id" {
   value       = aws_db_instance.employees_db.identifier
 }
 
+output "rds_instance_address" {
+  description = "Hostname of the RDS instance (without port)"
+  value       = split(":", aws_db_instance.employees_db.endpoint)[0]
+}
+
 output "db_name" {
   description = "Name of the RDS database"
   value       = aws_db_instance.employees_db.db_name
