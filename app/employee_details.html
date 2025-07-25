@@ -47,6 +47,7 @@
             padding: 12px;
             text-align: center;
             border: 1px solid #ddd;
+            color: black; /* Ensure text is visible in table */
         }
 
         th {
@@ -75,6 +76,20 @@
         a:hover {
             background-color: #0056b3;
         }
+
+        .delete-btn {
+            background-color: #dc3545; /* Red color for delete button */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        .delete-btn:hover {
+            background-color: #c82333;
+        }
     </style>
 </head>
 <body>
@@ -86,6 +101,7 @@
                     <th>Name</th>
                     <th>Employee ID</th>
                     <th>Email</th>
+                    <th>Actions</th> <!-- NEW COLUMN FOR ACTIONS -->
                 </tr>
             </thead>
             <tbody id="employeeTable"></tbody>
@@ -98,13 +114,55 @@
             const response = await fetch('/api/employees');
             const employees = await response.json();
 
-            // Correcting the way employee data is mapped to the table
-            document.getElementById('employeeTable').innerHTML = employees.data.map(emp =>
-                `<tr><td>${emp.name}</td><td>${emp.employee_id}</td><td>${emp.email}</td></tr>`
-            ).join('');
+            const employeeTableBody = document.getElementById('employeeTable');
+            employeeTableBody.innerHTML = ''; // Clear existing rows
+
+            if (employees.status === 'success' && employees.data && employees.data.length > 0) {
+                employees.data.forEach(emp => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${emp.name}</td>
+                        <td>${emp.employee_id}</td>
+                        <td>${emp.email}</td>
+                        <td>
+                            <button class="delete-btn" onclick="deleteEmployee(${emp.id})">Delete</button>
+                        </td>
+                    `;
+                    employeeTableBody.appendChild(row);
+                });
+            } else {
+                employeeTableBody.innerHTML = '<tr><td colspan="4">No employees found.</td></tr>';
+            }
         }
 
-        fetchEmployees();
+        // --- NEW JAVASCRIPT FUNCTION FOR DELETION ---
+        async function deleteEmployee(employeeId) {
+            if (!confirm(`Are you sure you want to delete employee with ID: ${employeeId}?`)) {
+                return; // User cancelled the deletion
+            }
+
+            try {
+                const response = await fetch(`/api/employees/${employeeId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Employee deleted successfully!');
+                    fetchEmployees(); // Refresh the table after deletion
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        fetchEmployees(); // Call on page load
     </script>
 </body>
 </html>

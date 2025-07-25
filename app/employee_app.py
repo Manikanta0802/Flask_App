@@ -84,6 +84,32 @@ def employees():
         if connection: # Ensure connection is closed even if an error occurs during connection creation
             connection.close()
 
+@app.route('/api/employees/<int:employee_id_to_delete>', methods=['DELETE'])
+def delete_employee(employee_id_to_delete):
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        cursor = connection.cursor()
+        # Execute DELETE query using the primary key 'id'
+        cursor.execute("DELETE FROM employees WHERE id = %s", (employee_id_to_delete,))
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Employee not found or already deleted"}), 404
+        else:
+            return jsonify({"status": "success", "message": "Employee deleted successfully!"}), 200
+
+    except psycopg2.Error as e:
+        connection.rollback()
+        return jsonify({"error": f"Database error: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
 if __name__ == "__main__":
     # In production, use a WSGI server like Gunicorn. For this project's scope, Flask's built-in server is used.
     app.run(host="0.0.0.0", port=80)
