@@ -5,8 +5,6 @@ import os
 
 app = Flask(__name__)
 
-# Parse DB_HOST to extract hostname and port
-# DB_HOST will come from Secrets Manager, e.g., "employees-db.c0y2x1y3z4a5.ap-south-1.rds.amazonaws.com:5432"
 db_host_env = os.getenv('DB_HOST')
 if db_host_env:
     if ':' in db_host_env:
@@ -100,6 +98,69 @@ def delete_employee(employee_id_to_delete):
             return jsonify({"error": "Employee not found or already deleted"}), 404
         else:
             return jsonify({"status": "success", "message": "Employee deleted successfully!"}), 200
+
+    except psycopg2.Error as e:
+        connection.rollback()
+        return jsonify({"error": f"Database error: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
+@app.route('/api/employees/<int:employee_id_to_fetch>', methods=['GET'])
+def get_single_employee(employee_id_to_fetch):
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id, name, employee_id, email FROM employees WHERE id = %s", (employee_id_to_fetch,))
+        row = cursor.fetchone()
+
+        if row is None:
+            return jsonify({"error": "Employee not found"}), 404
+        else:
+            employee_data = {
+                "id": row[0],
+                "name": row[1],
+                "employee_id": row[2],
+                "email": row[3]
+            }
+            return jsonify({"status": "success", "data": employee_data}), 200
+
+    except psycopg2.Error as e:
+        return jsonify({"error": f"Database error: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
+
+@app.route('/api/employees/<int:employee_id_to_update>', methods=['PUT'])
+def update_employee(employee_id_to_update):
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        data = request.json
+        if not all(key in data for key in ['name', 'employee_id', 'email']):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        cursor = connection.cursor()
+        cursor.execute(
+            "UPDATE employees SET name = %s, employee_id = %s, email = %s WHERE id = %s",
+            (data['name'], data['employee_id'], data['email'], employee_id_to_update)
+        )
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Employee not found or no changes made"}), 404
+        else:
+            return jsonify({"status": "success", "message": "Employee updated successfully!"}), 200
 
     except psycopg2.Error as e:
         connection.rollback()

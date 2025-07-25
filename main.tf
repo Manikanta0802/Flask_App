@@ -30,10 +30,8 @@ data "aws_ami" "amazon_linux_2_ami" {
   }
 }
 
-# Data source for current AWS caller identity (used in multiple modules)
 data "aws_caller_identity" "current" {}
 
-# VPC Module
 module "vpc" {
   source              = "./modules/vpc"
   aws_region          = var.aws_region
@@ -42,7 +40,6 @@ module "vpc" {
   private_subnet_cidr = ["10.0.10.0/24", "10.0.11.0/24"]
 }
 
-# Security Groups Module
 module "security_groups" {
   source         = "./modules/security_groups"
   vpc_id         = module.vpc.vpc_id
@@ -50,7 +47,6 @@ module "security_groups" {
   alb_sg_id      = module.security_groups.alb_sg_id
 }
 
-# RDS Module
 module "rds" {
   source                = "./modules/rds"
   vpc_id                = module.vpc.vpc_id
@@ -62,12 +58,10 @@ module "rds" {
   aws_account_id        = data.aws_caller_identity.current.account_id
 }
 
-# ECR Module
 module "ecr" {
   source = "./modules/ecr"
 }
 
-# ECS Module
 module "ecs" {
   source                = "./modules/ecs"
   vpc_id                = module.vpc.vpc_id
@@ -88,7 +82,6 @@ module "ecs" {
   db_credentials_secret_arn  = module.rds.db_credentials_secret_arn
 }
 
-# ALB Module
 module "alb" {
   source            = "./modules/alb"
   vpc_id            = module.vpc.vpc_id
@@ -96,7 +89,6 @@ module "alb" {
   alb_sg_id         = module.security_groups.alb_sg_id
 }
 
-# Bastion Module
 module "bastion" {
   source            = "./modules/bastion"
   vpc_id            = module.vpc.vpc_id
@@ -106,7 +98,6 @@ module "bastion" {
   key_pair_name     = var.key_pair_name
 }
 
-# CloudWatch Module
 module "cloudwatch" {
   source            = "./modules/cloudwatch"
   alb_id            = module.alb.alb_id

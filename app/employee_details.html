@@ -135,7 +135,6 @@
             }
         }
 
-        // --- NEW JAVASCRIPT FUNCTION FOR DELETION ---
         async function deleteEmployee(employeeId) {
             if (!confirm(`Are you sure you want to delete employee with ID: ${employeeId}?`)) {
                 return; // User cancelled the deletion
@@ -156,6 +155,68 @@
                     fetchEmployees(); // Refresh the table after deletion
                 } else {
                     alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function editEmployee(employeeId) {
+            try {
+                const response = await fetch(`/api/employees/${employeeId}`);
+                const result = await response.json();
+
+                if (response.ok && result.status === 'success') {
+                    const employee = result.data;
+                    document.getElementById('editEmployeeId').value = employee.id;
+                    document.getElementById('editName').value = employee.name;
+                    document.getElementById('editEmployee_id').value = employee.employee_id;
+                    document.getElementById('editEmail').value = employee.email;
+
+                    document.getElementById('editEmployeeModal').style.display = 'flex'; // Show modal
+                } else {
+                    alert('Error fetching employee data: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+
+        function closeEditModal() {
+            document.getElementById('editEmployeeModal').style.display = 'none';
+        }
+
+        async function saveEmployeeChanges() {
+            const id = document.getElementById('editEmployeeId').value;
+            const name = document.getElementById('editName').value;
+            const employee_id = document.getElementById('editEmployee_id').value;
+            const email = document.getElementById('editEmail').value;
+
+            if (!name || !employee_id || !email) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const data = { name, employee_id, email };
+
+            try {
+                const response = await fetch(`/api/employees/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Employee updated successfully!');
+                    closeEditModal(); // Close modal
+                    fetchEmployees(); // Refresh the table
+                } else {
+                    alert('Error updating employee: ' + result.error);
                 }
             } catch (error) {
                 alert('Error: ' + error.message);
