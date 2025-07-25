@@ -1,176 +1,318 @@
-from flask import Flask, request, jsonify, render_template
-# import pymysql # Old import
-import psycopg2 # New import for PostgreSQL
-import os
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Details</title>
+    <style>
+        body {
+            background-image: url('https://img.freepik.com/free-photo/notebook-glasses-crop-laptop-near-coffee_23-2147777915.jpg?t=st=1732718576~exp=1732722176~hmac=b890b12010d6f9c03110799b3e75aedc153da6ee610b4c17e029313b0592cc33&w=1380'); /* Replace with your image URL */
+            background-size: cover;
+            background-position: center;
+            height: 100vh; /* Make sure the background covers the full height */
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: red; /* Adjust text color for readability on background */
+        }
 
-app = Flask(__name__)
+        .container {
+            width: 80%;
+            max-width: 1200px;
+            margin: 20px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
 
-db_host_env = os.getenv('DB_HOST')
-if db_host_env:
-    if ':' in db_host_env:
-        host, port_str = db_host_env.split(':')
-        port = int(port_str)
-    else:
-        host = db_host_env
-        port = 5432 # Default PostgreSQL port
-else:
-    # Fallback for local testing or if env var is missing during dev
-    host = 'localhost'
-    port = 5432
+        h1 {
+            margin-top: 20px;
+            font-size: 2.5em;
+            color: #333;
+        }
 
-def get_db_connection():
-    """Establish a new database connection."""
-    try:
-        return psycopg2.connect(
-            host=host,
-            port=port,
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            dbname=os.getenv('DB_NAME') # 'dbname' for PostgreSQL, not 'database'
-        )
-    except psycopg2.Error as e: # Catch psycopg2 specific errors
-        print(f"Error connecting to the database: {e}")
-        return None
+        table {
+            width: 100%;
+            margin: 20px 0;
+            border-collapse: collapse;
+            background-color: #f9f9f9;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
 
-@app.route('/')
-def home():
-    return render_template('employee_index.html')
+        th, td {
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #ddd;
+            color: black; /* Ensure text is visible in table */
+        }
 
-@app.route('/employee')
-def employee_details():
-    return render_template('employee_details.html')
+        th {
+            background-color: #007BFF;
+            color: white;
+        }
 
-@app.route('/api/employees', methods=['GET', 'POST'])
-def employees():
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({"error": "Database connection failed"}), 500
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
 
-    try:
-        # Use connection.cursor() without parameters for default cursor, or specify cursor_factory for dicts
-        cursor = connection.cursor() 
-        if request.method == 'POST':
-            data = request.json
-            if not all(key in data for key in ['name', 'employee_id', 'email']):
-                return jsonify({"error": "Missing required fields"}), 400
+        tr:hover {
+            background-color: #ddd;
+        }
 
-            # Use %s for parameter substitution with psycopg2
-            cursor.execute("INSERT INTO employees (name, employee_id, email) VALUES (%s, %s, %s)",
-                           (data['name'], data['employee_id'], data['email']))
-            connection.commit()
-            return jsonify({"status": "success", "message": "Employee added successfully!"})
+        a {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 10px 20px;
+            background-color: #007BFF;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
 
-        elif request.method == 'GET':
-            cursor.execute("SELECT id, name, employee_id, email FROM employees")
-            rows = cursor.fetchall()
-            # PostgreSQL fetchall returns tuples, convert to dicts for JSON
-            employees_list = []
-            for row in rows:
-                employees_list.append({
-                    "id": row[0],
-                    "name": row[1],
-                    "employee_id": row[2],
-                    "email": row[3]
-                })
-            return jsonify({"status": "success", "data": employees_list})
-    except psycopg2.Error as e: # Catch psycopg2 specific errors
-        connection.rollback() # Rollback on error
-        return jsonify({"error": f"Database error: {e}"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if connection: # Ensure connection is closed even if an error occurs during connection creation
-            connection.close()
+        a:hover {
+            background-color: #0056b3;
+        }
 
-@app.route('/api/employees/<int:employee_id_to_delete>', methods=['DELETE'])
-def delete_employee(employee_id_to_delete):
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({"error": "Database connection failed"}), 500
+        .action-btn {
+            background-color: #28a745; /* Green for edit */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin: 0 5px;
+        }
 
-    try:
-        cursor = connection.cursor()
-        # Execute DELETE query using the primary key 'id'
-        cursor.execute("DELETE FROM employees WHERE id = %s", (employee_id_to_delete,))
-        connection.commit()
+        .action-btn.delete-btn {
+            background-color: #dc3545; /* Red for delete */
+        }
 
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Employee not found or already deleted"}), 404
-        else:
-            return jsonify({"status": "success", "message": "Employee deleted successfully!"}), 200
+        .action-btn:hover {
+            opacity: 0.9;
+        }
 
-    except psycopg2.Error as e:
-        connection.rollback()
-        return jsonify({"error": f"Database error: {e}"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if connection:
-            connection.close()
+        /* Modal Styles */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+            justify-content: center;
+            align-items: center;
+        }
 
-@app.route('/api/employees/<int:employee_id_to_fetch>', methods=['GET'])
-def get_single_employee(employee_id_to_fetch):
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({"error": "Database connection failed"}), 500
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            position: relative;
+            color: black; /* Ensure text is visible in modal */
+        }
 
-    try:
-        cursor = connection.cursor()
-        cursor.execute("SELECT id, name, employee_id, email FROM employees WHERE id = %s", (employee_id_to_fetch,))
-        row = cursor.fetchone()
+        .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
 
-        if row is None:
-            return jsonify({"error": "Employee not found"}), 404
-        else:
-            employee_data = {
-                "id": row[0],
-                "name": row[1],
-                "employee_id": row[2],
-                "email": row[3]
+        .close-button:hover,
+        .close-button:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .modal-content input {
+            width: calc(100% - 22px); /* Adjust for padding and border */
+            margin-bottom: 15px;
+        }
+
+        .modal-content button {
+            width: 100%;
+            padding: 10px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+
+        .modal-content button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Employee Details</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Employee ID</th>
+                    <th>Email</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="employeeTable"></tbody>
+        </table>
+        <a href="/">Back to Dashboard</a>
+    </div>
+
+    <!-- Edit Employee Modal -->
+    <div id="editEmployeeModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="closeEditModal()">&times;</span>
+            <h2>Edit Employee</h2>
+            <input type="hidden" id="editEmployeeId"> <!-- Hidden field to store the DB ID -->
+            <input type="text" id="editName" placeholder="Name">
+            <input type="text" id="editEmployee_id" placeholder="Employee ID">
+            <input type="email" id="editEmail" placeholder="Email">
+            <button onclick="saveEmployeeChanges()">Save Changes</button>
+        </div>
+    </div>
+
+    <script>
+        // Function to fetch and display employees
+        async function fetchEmployees() {
+            const response = await fetch('/api/employees');
+            const employees = await response.json();
+
+            const employeeTableBody = document.getElementById('employeeTable');
+            employeeTableBody.innerHTML = ''; // Clear existing rows
+
+            if (employees.status === 'success' && employees.data && employees.data.length > 0) {
+                employees.data.forEach(emp => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${emp.name}</td>
+                        <td>${emp.employee_id}</td>
+                        <td>${emp.email}</td>
+                        <td>
+                            <button class="action-btn" onclick="editEmployee(${emp.id})">Edit</button>
+                            <button class="action-btn delete-btn" onclick="deleteEmployee(${emp.id})">Delete</button>
+                        </td>
+                    `;
+                    employeeTableBody.appendChild(row);
+                });
+            } else {
+                employeeTableBody.innerHTML = '<tr><td colspan="4">No employees found.</td></tr>';
             }
-            return jsonify({"status": "success", "data": employee_data}), 200
+        }
 
-    except psycopg2.Error as e:
-        return jsonify({"error": f"Database error: {e}"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if connection:
-            connection.close()
+        // Function to handle deletion
+        async function deleteEmployee(employeeId) {
+            if (!confirm(`Are you sure you want to delete employee with ID: ${employeeId}?`)) {
+                return; // User cancelled the deletion
+            }
 
+            try {
+                const response = await fetch(`/api/employees/${employeeId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
 
-@app.route('/api/employees/<int:employee_id_to_update>', methods=['PUT'])
-def update_employee(employee_id_to_update):
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({"error": "Database connection failed"}), 500
+                const result = await response.json();
 
-    try:
-        data = request.json
-        if not all(key in data for key in ['name', 'employee_id', 'email']):
-            return jsonify({"error": "Missing required fields"}), 400
+                if (response.ok) {
+                    alert('Employee deleted successfully!');
+                    fetchEmployees(); // Refresh the table after deletion
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
 
-        cursor = connection.cursor()
-        cursor.execute(
-            "UPDATE employees SET name = %s, employee_id = %s, email = %s WHERE id = %s",
-            (data['name'], data['employee_id'], data['email'], employee_id_to_update)
-        )
-        connection.commit()
+        // --- NEW JAVASCRIPT FUNCTIONS FOR EDITING ---
 
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Employee not found or no changes made"}), 404
-        else:
-            return jsonify({"status": "success", "message": "Employee updated successfully!"}), 200
+        // Function to open the modal and populate it with employee data
+        async function editEmployee(employeeId) {
+            try {
+                const response = await fetch(`/api/employees/${employeeId}`);
+                const result = await response.json();
 
-    except psycopg2.Error as e:
-        connection.rollback()
-        return jsonify({"error": f"Database error: {e}"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if connection:
-            connection.close()
+                if (response.ok && result.status === 'success') {
+                    const employee = result.data;
+                    document.getElementById('editEmployeeId').value = employee.id;
+                    document.getElementById('editName').value = employee.name;
+                    document.getElementById('editEmployee_id').value = employee.employee_id;
+                    document.getElementById('editEmail').value = employee.email;
 
-if __name__ == "__main__":
-    # In production, use a WSGI server like Gunicorn. For this project's scope, Flask's built-in server is used.
-    app.run(host="0.0.0.0", port=80)
+                    document.getElementById('editEmployeeModal').style.display = 'flex'; // Show modal
+                } else {
+                    alert('Error fetching employee data: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Function to close the modal
+        function closeEditModal() {
+            document.getElementById('editEmployeeModal').style.display = 'none';
+        }
+
+        // Function to save changes to an employee
+        async function saveEmployeeChanges() {
+            const id = document.getElementById('editEmployeeId').value;
+            const name = document.getElementById('editName').value;
+            const employee_id = document.getElementById('editEmployee_id').value;
+            const email = document.getElementById('editEmail').value;
+
+            if (!name || !employee_id || !email) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const data = { name, employee_id, email };
+
+            try {
+                const response = await fetch(`/api/employees/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Employee updated successfully!');
+                    closeEditModal(); // Close modal
+                    fetchEmployees(); // Refresh the table
+                } else {
+                    alert('Error updating employee: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Call on page load
+        fetchEmployees();
+    </script>
+</body>
+</html>
