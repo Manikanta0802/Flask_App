@@ -1,0 +1,1 @@
+# No variables required for ECR module
