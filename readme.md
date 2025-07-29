@@ -44,7 +44,11 @@ cd Employee_Web
 
 You MUST set up the OIDC Identity Provider and IAM Role in your AWS account. This is a one-time manual process.
 
-Refer to the detailed instructions in my previous response on how to create the token.actions.githubusercontent.com Identity Provider and the github-actions-oidc-role (or whatever you name it) with the correct trust policy and permissions.
+Navigate to IAM (Identity and Access Management)/Identity Providers and click on Add Provider, Select the OpenId Connect and create the token.actions.githubusercontent.com Identity Provider and the github-actions-oidc-role (or whatever you name it) with the correct trust policy and permissions.
+<img width="940" height="248" alt="image" src="https://github.com/user-attachments/assets/a2d3e063-46ae-4566-b870-7f6e49265c6c" />
+
+<img width="940" height="362" alt="image" src="https://github.com/user-attachments/assets/84e0a92c-45b3-4c53-a1ea-bc46cc821df2" />
+
 
 **Create AWS S3 Bucket and DynamoDB Table (Manually for first time):**
 
@@ -80,6 +84,8 @@ DB_MASTER_USERNAME: Your RDS master username.
 DB_MASTER_PASSWORD: Your RDS master password.
 
 DB_SECRET_NAME: The name of your Secrets Manager secret (employee_app/db_credentials_new_1).
+<img width="914" height="393" alt="image" src="https://github.com/user-attachments/assets/bd2489f1-2952-4aea-8cdb-7e35603227bc" />
+
 
 **Application Files:**
 
