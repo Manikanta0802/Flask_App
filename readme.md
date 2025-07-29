@@ -95,7 +95,7 @@ If you have unit tests, ensure your pytest setup is correct for the pytest step.
 
 Once all these prerequisites are met and your files are committed to the main branch, a push to main will automatically trigger this powerful CI/CD pipeline!
 
-## Destroying the Infrastructure
+## Deploying the Infrastructure
 Once your GitHub repository is set up with the workflow file and secrets, the CI/CD pipeline will automatically trigger on:
 
 **Pushes to the main branch:** Any code changes pushed to main will initiate a new build and deployment.
