@@ -1,11 +1,15 @@
 name: CI/CD Pipeline for Employee App (Fargate)
 
 on:
-  push:
-    branches:
-      - main # Trigger on pushes to the main branch
+  #push:
+    #branches:
+      #- main # Trigger on pushes to the main branch
   workflow_dispatch:
-
+    inputs:
+      confirm_deploy:
+        description: 'Type "deploy" to confirm infrastructure deletion'
+        required: true
+        type: string
 env:
   AWS_REGION: ap-south-1
 
