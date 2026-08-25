@@ -1,8 +1,7 @@
-from flask import Flask, request, jsonify, render_template
-# import pymysql # Old import
-#testing-1
-import psycopg2 # New import for PostgreSQL
 import os
+
+import psycopg2
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
