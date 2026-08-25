@@ -85,9 +85,7 @@ def employees():
                 )
 
             if request.method == "GET":
-                cursor.execute(
-                    "SELECT id, name, employee_id, email FROM employees"
-                )
+                cursor.execute("SELECT id, name, employee_id, email FROM employees")
 
                 rows = cursor.fetchall()
 
